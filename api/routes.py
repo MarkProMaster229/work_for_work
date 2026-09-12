@@ -14,8 +14,11 @@ from api.handlers import (
     calculate,
     export_result,
     load_scenario,
+    save_variant,
+    list_variants,
+    delete_variant,
+    compare_variants,
 )
-
 
 api_bp = Blueprint("api", __name__, url_prefix="/api")
 
@@ -138,4 +141,55 @@ def route_export():
         result = export_result(scenario, overrides)
     except Exception as e:
         return jsonify({"error": str(e)}), 400
+    return jsonify(result)
+
+
+
+@api_bp.route("/variants/save", methods=["POST"])
+def route_save_variant():
+    data = request.get_json(silent=True) or {}
+    name = data.get("name")
+    overrides = data.get("overrides", {})
+    description = data.get("description", "")
+    
+    if not name:
+        return jsonify({"error": "name is required"}), 400
+    
+    try:
+        result = save_variant(name, overrides, description)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+    
+    return jsonify(result)
+
+
+@api_bp.route("/variants", methods=["GET"])
+def route_list_variants():
+    return jsonify({"variants": list_variants()})
+
+
+@api_bp.route("/variants/<name>", methods=["DELETE"])
+def route_delete_variant(name: str):
+    try:
+        result = delete_variant(name)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 404
+    return jsonify(result)
+
+
+@api_bp.route("/variants/compare", methods=["POST"])
+def route_compare_variants():
+    scenario = ensure_scenario()
+    data = request.get_json(silent=True) or {}
+    name_a = data.get("variant_a")
+    name_b = data.get("variant_b")
+    
+    if not name_a or not name_b:
+        return jsonify({"error": "variant_a and variant_b are required"}), 400
+    
+    try:
+        result = compare_variants(scenario, name_a, name_b)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+    
     return jsonify(result)

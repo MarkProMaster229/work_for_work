@@ -1,16 +1,14 @@
-"""
-Модули реакции — принимают данные от фронта, вызывают core, возвращают результат.
-"""
 from __future__ import annotations
 import copy
 import sys
 from pathlib import Path
 
-# Импорты из core (предполагаем, что модули уже написаны)
 from core.graph import build_graph
 from core.simulation import bfs
 from core.metrics import calc_metrics
 from core.coords import to_latlon
+
+from core.metrics import calc_metrics, calc_metrics_with_reasons, diagnose_no_route
 
 # Импорт физики
 from geometry import load, snapshot, validate
@@ -259,16 +257,10 @@ def apply_overrides(scenario: dict, overrides: dict) -> dict:
 # ============================================================
 # 6. ПОЛНЫЙ РАСЧЁТ МЕТРИК
 # ============================================================
-
 def calculate(scenario: dict, overrides: dict | None = None) -> dict:
-    """
-    Полный расчёт метрик за весь период с учётом overrides.
-    Это главная точка входа для кнопки "Применить".
-    """
     if overrides:
         scenario = apply_overrides(scenario, overrides)
     
-    # Валидируем (на случай, если overrides что-то сломали)
     validate(scenario)
     
     env = scenario["environment"]
@@ -278,17 +270,19 @@ def calculate(scenario: dict, overrides: dict | None = None) -> dict:
     clients = [g["id"] for g in scenario["ground_sites"] if g["role"] == "client"]
     gateways = {g["id"] for g in scenario["ground_sites"] if g["role"] == "gateway"}
     
-    # Цикл по времени
     routes = []
+    graphs_by_t = {}
     for t_s in range(0, horizon_s, step_s):
         snap = snapshot(scenario, t_s)
         graph = build_graph(snap["edges"])
+        graphs_by_t[t_s] = graph
         for client in clients:
             path = bfs(client, gateways, graph)
             routes.append({"t_s": t_s, "client_id": client, "path": path})
     
-    # Метрики
-    metrics = calc_metrics(routes, clients, step_s)
+    metrics = calc_metrics_with_reasons(
+        routes, clients, step_s, scenario, graphs_by_t
+    )
     
     return {
         "metrics": metrics,
@@ -359,4 +353,132 @@ def load_scenario(json_data: dict) -> dict:
         "failures": json_data.get("failures", []),
         "gateway_outages": json_data.get("gateway_outages", []),
         "launch_stage": json_data["design"]["launch_stage"],
+    }
+
+def diagnose_no_route(client: str, graph: dict, scenario: dict, t_s: float) -> str:
+    """
+    Определяет причину отсутствия маршрута.
+    Возвращает одну из строк:
+      - "no_visible_satellite"  — у клиента нет видимых спутников
+      - "gateway_unavailable"   — шлюз в отказе
+      - "no_gateway_contact"    — у шлюза нет видимых спутников
+      - "isl_network_broken"    — спутники есть, но сеть разорвана
+    """
+    env = scenario["environment"]
+    horizon_s = env["horizon_s"]
+    
+    # 1. У клиента есть видимые спутники?
+    client_neighbors = graph.get(client, [])
+    if not client_neighbors:
+        return "no_visible_satellite"
+    
+    # 2. Какие шлюзы активны в этот момент?
+    active_gateways = []
+    for g in scenario["ground_sites"]:
+        if g["role"] != "gateway":
+            continue
+        # Проверяем gateway_outages
+        offline = any(
+            f["gateway_id"] == g["id"] and f["start_s"] <= t_s < f["end_s"]
+            for f in scenario.get("gateway_outages", [])
+        )
+        if not offline:
+            active_gateways.append(g["id"])
+    
+    if not active_gateways:
+        return "gateway_unavailable"
+    
+    # 3. У активных шлюзов есть видимые спутники?
+    gateway_has_sat = False
+    for gw in active_gateways:
+        if graph.get(gw):
+            gateway_has_sat = True
+            break
+    if not gateway_has_sat:
+        return "no_gateway_contact"
+    
+    return "isl_network_broken"
+
+
+
+# ============================================================
+# 9. СОХРАНЕНИЕ И СРАВНЕНИЕ ВАРИАНТОВ
+# ============================================================
+
+# In-memory хранилище вариантов (для хакатона — хватит)
+_VARIANTS = {}
+
+
+def save_variant(name: str, overrides: dict, description: str = "") -> dict:
+    """
+    Сохраняет вариант (overrides) под именем.
+    Если имя уже есть — перезаписывает.
+    """
+    _VARIANTS[name] = {
+        "name": name,
+        "overrides": copy.deepcopy(overrides or {}),
+        "description": description,
+    }
+    return {"status": "ok", "name": name, "total_variants": len(_VARIANTS)}
+
+
+def list_variants() -> list:
+    """Возвращает список сохранённых вариантов (без метрик)."""
+    return [
+        {
+            "name": v["name"],
+            "overrides": v["overrides"],
+            "description": v["description"],
+        }
+        for v in _VARIANTS.values()
+    ]
+
+
+def delete_variant(name: str) -> dict:
+    """Удаляет вариант по имени."""
+    if name not in _VARIANTS:
+        raise ValueError(f"Unknown variant: {name}")
+    del _VARIANTS[name]
+    return {"status": "ok", "name": name}
+
+
+def compare_variants(scenario: dict, name_a: str, name_b: str) -> dict:
+    """
+    Сравнивает два сохранённых варианта.
+    Прогоняет calculate для каждого и считает разницу.
+    """
+    if name_a not in _VARIANTS:
+        raise ValueError(f"Unknown variant: {name_a}")
+    if name_b not in _VARIANTS:
+        raise ValueError(f"Unknown variant: {name_b}")
+    
+    var_a = _VARIANTS[name_a]
+    var_b = _VARIANTS[name_b]
+    
+    result_a = calculate(scenario, var_a["overrides"])
+    result_b = calculate(scenario, var_b["overrides"])
+    
+    # Считаем разницу по каждому клиенту
+    diff = {}
+    for client in result_a["metrics"]:
+        m_a = result_a["metrics"][client]
+        m_b = result_b["metrics"][client]
+        diff[client] = {
+            "path_pct": round(m_b["path_pct"] - m_a["path_pct"], 2),
+            "max_gap_s": m_b["max_gap_s"] - m_a["max_gap_s"],
+            "avg_hops": round(m_b["avg_hops"] - m_a["avg_hops"], 2),
+        }
+    
+    return {
+        "variant_a": {
+            "name": name_a,
+            "overrides": var_a["overrides"],
+            "metrics": result_a["metrics"],
+        },
+        "variant_b": {
+            "name": name_b,
+            "overrides": var_b["overrides"],
+            "metrics": result_b["metrics"],
+        },
+        "diff": diff,
     }
