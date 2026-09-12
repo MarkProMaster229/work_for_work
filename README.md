@@ -23,18 +23,39 @@ python3 -m api.app
 
 
 ## Установка
+## Установка и запуск
 
-pip install -r requirements.txt
 
-Зависимости: flask, numpy. Требования: Python 3.10+.
+### Backend (Flask API)
 
-## Запуск
+Установка:
 
-Backend:
-  cd work_for_work
-  python3 -m api.app
+    pip install -r requirements.txt
+
+Зависимости: flask, numpy. Требуется Python 3.10+.
+
+Запуск:
+
+    cd work_for_work
+    python3 -m api.app
 
 API будет доступен на http://localhost:5000.
+
+### Frontend (React + Vite)
+
+Установка:
+
+    cd my-react-vite-app
+    npm install
+    npm install maplibre-gl
+
+Зависимости: react, react-dom, vite, maplibre-gl. Требуется Node 18+.
+
+Запуск:
+
+    npm run dev
+
+  
 
 Frontend:
 

@@ -57,6 +57,13 @@ function cleanOverrides(o) {
   return out;
 }
 
+/** Слайдер идёт до horizon_s - step_s: правый конец не входит в расчёт. */
+function effectiveMax(env) {
+  if (!env?.horizon_s) return 86400 - 120;
+  const step = env.step_s ?? 120;
+  return Math.max(step, env.horizon_s - step);
+}
+
 function formatTime(seconds) {
   if (!Number.isFinite(seconds) || seconds < 0) return "—";
   const s = Math.floor(seconds);
@@ -68,6 +75,14 @@ function formatTime(seconds) {
   if (m > 0) parts.push(`${m} мин`);
   if (sec > 0 || parts.length === 0) parts.push(`${sec} с`);
   return parts.join(" ");
+}
+
+/** Ошибка с указанием поля: "Ошибка в поле «altitude_km»: ...". */
+function formatLoadError(err) {
+  const field = err?.field;
+  const msg = err?.message || "неизвестная ошибка";
+  if (field) return `Ошибка в поле «${field}»: ${msg}`;
+  return msg;
 }
 
 function addOrMergeInterval(list, idKey, newItem) {
@@ -107,7 +122,7 @@ export default function App() {
   const [groundSites, setGroundSites] = useState([]);
   const [overrides, setOverrides] = useState(EMPTY_OVERRIDES);
   const [error, setError] = useState(null);
-  const [sliderConfig, setSliderConfig] = useState({ max: 86400, step: 120 });
+  const [sliderConfig, setSliderConfig] = useState({ max: 86280, step: 120 });
 
   const [selectedClient, setSelectedClient] = useState(null);
 
@@ -167,7 +182,7 @@ export default function App() {
         const env = s?.environment || {};
         if (env.horizon_s) {
           setSliderConfig({
-            max: env.horizon_s,
+            max: effectiveMax(env),
             step: env.step_s ?? 120,
           });
         }
@@ -291,7 +306,7 @@ export default function App() {
         await recalcAll(next);
       } catch (err) {
         console.error("recalc failed:", err);
-        setError("Не удалось пересчитать: " + err.message);
+        setError("Не удалось пересчитать: " + (err.message || ""));
       }
     },
     [overrides, recalcAll],
@@ -305,7 +320,7 @@ export default function App() {
         await recalcAll(next);
       } catch (err) {
         console.error("launch_stage recalc failed:", err);
-        setError("Не удалось пересчитать: " + err.message);
+        setError("Не удалось пересчитать: " + (err.message || ""));
       }
     },
     [overrides, recalcAll],
@@ -319,7 +334,7 @@ export default function App() {
         await recalcAll(next);
       } catch (err) {
         console.error("planes recalc failed:", err);
-        setError("Не удалось пересчитать: " + err.message);
+        setError("Не удалось пересчитать: " + (err.message || ""));
       }
     },
     [overrides, recalcAll],
@@ -349,7 +364,7 @@ export default function App() {
       await recalcAll(overrides);
     } catch (err) {
       console.error(err);
-      setError("Ошибка пересчёта: " + err.message);
+      setError("Ошибка пересчёта: " + (err.message || ""));
     }
   }, [overrides, recalcAll]);
 
@@ -364,7 +379,7 @@ export default function App() {
       await recalcAll(EMPTY_OVERRIDES);
     } catch (err) {
       console.error("reset all failed:", err);
-      setError("Не удалось сбросить: " + err.message);
+      setError("Не удалось сбросить: " + (err.message || ""));
     } finally {
       setResetting(false);
     }
@@ -375,7 +390,15 @@ export default function App() {
     async (file) => {
       try {
         const text = await file.text();
-        const scenarioJson = JSON.parse(text);
+        let scenarioJson;
+        try {
+          scenarioJson = JSON.parse(text);
+        } catch (e) {
+          throw Object.assign(new Error("не является корректным JSON"), {
+            field: "файл",
+          });
+        }
+
         const info = await api.loadScenario(scenarioJson);
         console.log("Сценарий принят бэкендом:", info);
 
@@ -384,7 +407,7 @@ export default function App() {
           scenarioJson.meta?.title || scenarioJson.meta?.id || file.name,
         );
         setSliderConfig({
-          max: scenarioJson.environment?.horizon_s ?? 86400,
+          max: effectiveMax(scenarioJson.environment),
           step: scenarioJson.environment?.step_s ?? 120,
         });
         if (scenarioJson.design?.planes?.length) {
@@ -405,7 +428,7 @@ export default function App() {
         setError(null);
       } catch (err) {
         console.error("handleScenarioFile:", err);
-        setError("Не удалось загрузить сценарий: " + err.message);
+        setError("Не удалось загрузить сценарий. " + formatLoadError(err));
       }
     },
     [refreshGroundSites, applyMetrics],
@@ -431,7 +454,7 @@ export default function App() {
       URL.revokeObjectURL(url);
     } catch (err) {
       console.error("export failed:", err);
-      setError("Не удалось выгрузить сценарий: " + err.message);
+      setError("Не удалось выгрузить сценарий: " + (err.message || ""));
     } finally {
       setExporting(false);
     }
@@ -457,7 +480,7 @@ export default function App() {
       URL.revokeObjectURL(url);
     } catch (err) {
       console.error("exportResult failed:", err);
-      setError("Не удалось выгрузить результат: " + err.message);
+      setError("Не удалось выгрузить результат: " + (err.message || ""));
     } finally {
       setExportingResult(false);
     }
@@ -470,7 +493,7 @@ export default function App() {
         await api.saveVariant(name, cleanOverrides(ovr), description);
         await refreshVariants();
       } catch (err) {
-        setError("Не удалось сохранить вариант: " + err.message);
+        setError("Не удалось сохранить вариант: " + (err.message || ""));
       } finally {
         setVariantsBusy(false);
       }
@@ -491,7 +514,7 @@ export default function App() {
           setCompareResult(null);
         }
       } catch (err) {
-        setError("Не удалось удалить вариант: " + err.message);
+        setError("Не удалось удалить вариант: " + (err.message || ""));
       } finally {
         setVariantsBusy(false);
       }
@@ -505,7 +528,7 @@ export default function App() {
       const result = await api.compareVariants(a, b);
       setCompareResult(result);
     } catch (err) {
-      setError("Не удалось сравнить варианты: " + err.message);
+      setError("Не удалось сравнить варианты: " + (err.message || ""));
     } finally {
       setVariantsBusy(false);
     }
@@ -517,13 +540,18 @@ export default function App() {
 
   const timePresets = useMemo(
     () =>
-      [0, 3600, 21600, 43200, 64800, 86400].filter((v) => v <= sliderConfig.max),
+      [0, 3600, 21600, 43200, 64800, 86400].filter(
+        (v) => v <= sliderConfig.max,
+      ),
     [sliderConfig.max],
   );
 
   const selectedMetrics = selectedClient
     ? perClientMetrics?.[selectedClient]
     : null;
+
+  // реальная длина расчётного периода: последний момент + шаг
+  const fullHorizon = sliderConfig.max + sliderConfig.step;
 
   return (
     <div className="app">
@@ -573,6 +601,7 @@ export default function App() {
             onSelectClient={setSelectedClient}
             selectedClient={selectedClient}
             maxDuration={sliderConfig.max}
+            horizonS={fullHorizon}
             routes={routes}
             servingSatellites={servingSatellites}
           />
@@ -719,7 +748,7 @@ export default function App() {
         <AvailabilityTimeline
           clients={clients}
           perClientMetrics={perClientMetrics}
-          maxTime={sliderConfig.max}
+          maxTime={fullHorizon}
           currentTime={currentTime}
           selectedClient={selectedClient}
           onSelectClient={setSelectedClient}
@@ -765,13 +794,14 @@ export default function App() {
               marginTop: 8,
               borderCollapse: "collapse",
               width: "100%",
-              maxWidth: 720,
+              maxWidth: 820,
               color: "#1f2937",
             }}
           >
             <thead>
               <tr style={{ background: "#f3f4f6", color: "#111827" }}>
                 <th style={{ textAlign: "left", padding: "6px 12px" }}>Клиент</th>
+                <th style={{ textAlign: "right", padding: "6px 12px" }}>Видимость</th>
                 <th style={{ textAlign: "right", padding: "6px 12px" }}>Доступность</th>
                 <th style={{ textAlign: "right", padding: "6px 12px" }}>Макс. перерыв</th>
                 <th style={{ textAlign: "right", padding: "6px 12px" }}>Ср. hops</th>
@@ -792,6 +822,17 @@ export default function App() {
                     onClick={() => setSelectedClient(id)}
                   >
                     <td style={{ padding: "6px 12px", fontWeight: 600 }}>{id}</td>
+                    <td
+                      style={{
+                        textAlign: "right",
+                        padding: "6px 12px",
+                        color: "#6b7280",
+                      }}
+                    >
+                      {m.visibility_pct != null
+                        ? `${m.visibility_pct.toFixed(2)}%`
+                        : "—"}
+                    </td>
                     <td style={{ textAlign: "right", padding: "6px 12px" }}>
                       {m.path_pct != null ? `${m.path_pct.toFixed(2)}%` : "—"}
                     </td>
