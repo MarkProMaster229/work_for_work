@@ -372,16 +372,16 @@ export default function App() {
             <div className="mp-btns">
                            <input 
                 type="file" 
-                ref={fileInputRef} 
+                
                 style={{ display: 'none' }} 
                 accept=".json"
-                onChange={handleScenarioUpload} 
+                
               />
 
               {/* ОБНОВЛЕННАЯ КНОПКА */}
               <button 
                 className="btn" 
-                onClick={() => fileInputRef.current?.click()}
+                
               >
                 ⬆ Загрузить сценарий
               </button>
@@ -399,7 +399,7 @@ export default function App() {
           {/* Сам контейнер, куда MapLibre вставит холст */}
           <div 
             ref={mapContainerRef} 
-            style={{ width: '100%', height: '100%', borderRadius: '4px', overflow: 'hidden' }} 
+            style={{ width: '100%', height: '500px', borderRadius: '4px', overflow: 'hidden' }} 
           />
 
           <div className="map-time-control" style={{
