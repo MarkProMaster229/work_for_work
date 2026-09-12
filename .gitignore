@@ -9,3 +9,6 @@ api/__pycache__/app.cpython-314.pyc
 api/__pycache__/routes.cpython-314.pyc
 api/__pycache__/test_handlers.cpython-314.pyc
 api/__pycache__/handlers.cpython-314.pyc
+*.env*
+*__pycache__*
+*node_modules*
