@@ -4,6 +4,7 @@ Flask роуты — принимают HTTP-запросы и вызывают 
 from __future__ import annotations
 import os
 from flask import Blueprint, jsonify, request
+import copy
 
 from geometry import load, validate
 from api.handlers import (
@@ -18,6 +19,7 @@ from api.handlers import (
     list_variants,
     delete_variant,
     compare_variants,
+    apply_overrides,
 )
 
 api_bp = Blueprint("api", __name__, url_prefix="/api")
@@ -51,14 +53,8 @@ def health():
 
 
 # ---------- Загрузка сценария ----------
-
 @api_bp.route("/scenario/load", methods=["POST"])
 def route_load_scenario():
-    """
-    Загрузить сценарий.
-    Вариант 1: {"path": "/путь/к/файлу.json"}
-    Вариант 2: сам JSON в теле запроса
-    """
     data = request.get_json(silent=True) or {}
     path = data.get("path")
     
@@ -68,8 +64,14 @@ def route_load_scenario():
         else:
             if not data:
                 return jsonify({"error": "No scenario data"}), 400
-            validate(data)
-            scenario = data
+            
+            # Если это результат — берём effective_scenario
+            if data.get("schema_version") == "cosmo-A-result-1.0":
+                scenario = data["effective_scenario"]
+            else:
+                scenario = data
+            
+            validate(scenario)
     except Exception as e:
         return jsonify({"error": str(e)}), 400
     
@@ -81,8 +83,6 @@ def route_load_scenario():
         "scenario_id": _state["scenario_id"],
         "scenario": load_scenario(scenario),
     })
-
-
 # ---------- Наземные пункты ----------
 
 @api_bp.route("/ground_sites", methods=["GET"])
@@ -219,3 +219,16 @@ def route_compare_variants():
         return jsonify({"error": str(e)}), 400
     
     return jsonify(result)
+
+@api_bp.route("/scenario/export", methods=["POST"])
+def route_export_scenario():
+    scenario = ensure_scenario()
+    data = request.get_json(silent=True) or {}
+    overrides = data.get("overrides")
+    
+    if overrides:
+        effective = apply_overrides(scenario, overrides)
+    else:
+        effective = copy.deepcopy(scenario)
+    
+    return jsonify(effective)
