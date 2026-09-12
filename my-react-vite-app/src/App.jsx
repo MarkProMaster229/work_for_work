@@ -1,11 +1,68 @@
 import React, { useState, useEffect, useRef } from 'react';
-import * as maplibregl from 'maplibre-gl'; // Добавлен импорт библиотеки карты
-import 'maplibre-gl/dist/maplibre-gl.css'; // Импортируем стили для карты
-import './jabajaba.css'; 
+import * as maplibregl from 'maplibre-gl';
+import 'maplibre-gl/dist/maplibre-gl.css';
+import './jabajaba.css';
 import { api } from './api.jsx';
 
+function transformBackendToGeoJSON(data, groundSites = []) {
+  const features = [];
+  const coordsMap = {};
+
+  if (data.satellites) {
+    for (const sat of data.satellites) {
+      coordsMap[sat.id] = [sat.lon, sat.lat];
+      features.push({
+        type: 'Feature',
+        geometry: { type: 'Point', coordinates: [sat.lon, sat.lat] },
+        properties: {
+          node_type: 'satellite',
+          node_id: sat.id,
+          name: sat.id,
+          active: sat.active,
+        },
+      });
+    }
+  }
+
+  if (groundSites) {
+    for (const site of groundSites) {
+      coordsMap[site.id] = [site.lon, site.lat];
+      features.push({
+        type: 'Feature',
+        geometry: { type: 'Point', coordinates: [site.lon, site.lat] },
+        properties: {
+          node_type: 'ground_site',
+          node_id: site.id,
+          name: site.name || site.id,
+          role: site.role,
+        },
+      });
+    }
+  }
+
+  if (data.edges) {
+    for (const edge of data.edges) {
+      const [a, b, dist] = edge;
+      if (coordsMap[a] && coordsMap[b]) {
+        features.push({
+          type: 'Feature',
+          geometry: {
+            type: 'LineString',
+            coordinates: [coordsMap[a], coordsMap[b]],
+          },
+          properties: {
+            edge_type: 'link',
+            distance: dist,
+          },
+        });
+      }
+    }
+  }
+
+  return { type: 'FeatureCollection', features };
+}
+
 export default function App() {
-  // Состояния для KPI (можно будет передавать через props)
   const [kpi, setKpi] = useState({
     minAvailability: '—',
     avgAvailability: '—',
@@ -13,40 +70,36 @@ export default function App() {
     activeKA: 0,
   });
 
-  // Состояния для интерактивных элементов
   const [isLoading, setIsLoading] = useState(false);
   const [pipeJoints, setPipeJoints] = useState([]);
   const [isPipeJerked, setIsPipeJerked] = useState(false);
- const mapContainerRef = useRef(null);
+  const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
-  const [currentTime, setCurrentTime] = useState(0); // t_s для API
+  const [currentTime, setCurrentTime] = useState(0);
   const [loading, setLoading] = useState(true);
-  // Ссылки на карточки для рендеринга декоративных рамок
   const creamCardRef = useRef(null);
   const mainCardRef = useRef(null);
-  const [snapshot, setSnapshot] = useState(null);
- const spritesRef = useRef({ curl: null, corner: null, crest: null });
-  const [error, setError] = useState(null);
+  const spritesRef = useRef({ curl: null, corner: null, crest: null });
+  const groundSitesRef = useRef([]);
+
   useEffect(() => {
     if (!mapContainerRef.current) return;
-    
+
     const map = new maplibregl.Map({
       style: 'https://tiles.openfreemap.org/styles/liberty',
-      center: [37.6173, 55.7558], // Центрируем по дефолту на Москву (или поменяй на свои координаты)
-      zoom: 3, // Для спутников лучше зум поменьше
+      center: [37.6173, 55.7558],
+      zoom: 3,
       container: mapContainerRef.current,
     });
 
     mapRef.current = map;
 
     map.on('load', () => {
-      // Инициализируем пустой источник данных, чтобы не упали слои
       map.addSource('graph-source', {
         type: 'geojson',
-        data: { type: 'FeatureCollection', features: [] }
+        data: { type: 'FeatureCollection', features: [] },
       });
 
-      // СЛОЙ ДЛЯ ЛИНИЙ (МАРШРУТЫ)
       map.addLayer({
         id: 'graph-edges',
         type: 'line',
@@ -55,11 +108,10 @@ export default function App() {
         paint: {
           'line-color': '#3b82f6',
           'line-width': 3,
-          'line-opacity': 0.7
-        }
+          'line-opacity': 0.7,
+        },
       });
 
-      // СЛОЙ ДЛЯ ТОЧЕК (СПУТНИКИ И СТАНЦИИ)
       map.addLayer({
         id: 'graph-nodes',
         type: 'circle',
@@ -69,23 +121,22 @@ export default function App() {
           'circle-radius': [
             'match',
             ['get', 'node_type'],
-            'ground_site', 8,  // Наземные станции чуть больше
-            'satellite', 6,    // Спутники чуть меньше
-            6
+            'ground_site', 8,
+            'satellite', 6,
+            6,
           ],
           'circle-color': [
             'match',
             ['get', 'node_type'],
-            'ground_site', '#10b981', // Зеленый для станций
-            'satellite', '#ef4444',   // Красный для спутников
-            '#ef4444'
+            'ground_site', '#10b981',
+            'satellite', '#ef4444',
+            '#ef4444',
           ],
           'circle-stroke-width': 2,
-          'circle-stroke-color': '#ffffff'
-        }
+          'circle-stroke-color': '#ffffff',
+        },
       });
 
-      // ИНТЕРАКТИВ И ПОПАПЫ
       map.on('click', 'graph-nodes', (e) => {
         const feature = e.features[0];
         const coordinates = feature.geometry.coordinates.slice();
@@ -119,33 +170,32 @@ export default function App() {
     return () => map.remove();
   }, []);
 
-  // 3. ФЕТЧ ДАННЫХ И ОБНОВЛЕНИЕ КАРТЫ ПРИ ИЗМЕНЕНИИ t_s
+  useEffect(() => {
+    api.getGroundSites().then((data) => {
+      groundSitesRef.current = [...(data.clients || []), ...(data.gateways || [])];
+    }).catch(() => {});
+  }, []);
+
   useEffect(() => {
     if (loading || !mapRef.current) return;
 
-    // Вызываем роут /api/snapshot через наш клиент
     api.getSnapshot(currentTime)
-      .then(data => {
-        // Конвертируем данные бэка в GeoJSON
-        const geojson = transformBackendToGeoJSON(data);
-        
-        // Магия динамического обновления: просто меняем данные у существующего Source
+      .then((data) => {
+        const geojson = transformBackendToGeoJSON(data, groundSitesRef.current);
         const source = mapRef.current.getSource('graph-source');
         if (source) {
           source.setData(geojson);
         }
       })
-      .catch(err => {
+      .catch((err) => {
         console.error("Ошибка при обновлении карты:", err);
       });
   }, [currentTime, loading]);
 
-  // 1. Инициализация: Загрузка спрайтов и первая сборка трубы
   useEffect(() => {
     buildPipe();
     window.addEventListener('resize', handleResize);
-  
-    // Функция загрузки картинок через Promise
+
     const loadSprite = (path) => {
       return new Promise((resolve, reject) => {
         const image = new Image();
@@ -155,14 +205,12 @@ export default function App() {
       });
     };
 
-    // Загружаем спрайты параллельно
     Promise.all([
-      loadSprite('sprites/curl.png').catch(() => null),     // Замените пути на ваши реальные
+      loadSprite('sprites/curl.png').catch(() => null),
       loadSprite('sprites/corner.png').catch(() => null),
-      loadSprite('sprites/crest.png').catch(() => null)
+      loadSprite('sprites/crest.png').catch(() => null),
     ]).then(([curl, corner, crest]) => {
       spritesRef.current = { curl, corner, crest };
-      // Как только спрайты загружены, пересчитываем рамки
       updateAllFrames();
     });
 
@@ -171,7 +219,6 @@ export default function App() {
     };
   }, []);
 
-  // Пересчет при изменении размеров экрана
   const handleResize = () => {
     buildPipe();
     updateAllFrames();
@@ -182,24 +229,21 @@ export default function App() {
     if (mainCardRef.current) layoutFrame(mainCardRef.current);
   };
 
-  // 2. Логика генерации стыков газовой трубы
   const buildPipe = () => {
     const height = window.innerHeight;
     let spots = [0.18, 0.51, 0.86];
     if (Math.random() < 0.35) {
       spots = [0.28, 0.74];
     }
-    const joints = spots.map(spot => Math.round(height * spot));
+    const joints = spots.map((spot) => Math.round(height * spot));
     setPipeJoints(joints);
   };
 
   const handlePipeClick = () => {
     setIsPipeJerked(false);
-    // Провоцируем reflow для перезапуска анимации (аналог void pipe.offsetWidth)
     setTimeout(() => setIsPipeJerked(true), 0);
   };
 
-  // 3. Отрисовка элементов декоративной рамки (внутренняя математика исходного скрипта)
   const paintPiece = (style, sprite, repeat, width, height) => {
     style.maskImage = `url(${sprite.url})`;
     style.webkitMaskImage = `url(${sprite.url})`;
@@ -233,7 +277,7 @@ export default function App() {
     const band = Math.min(30, height * 0.22);
     let cornerSize = Math.min(88, width * 0.34);
     let cornerH = cornerSize * (corner.height / corner.width);
-    
+
     if (cornerH > height * 0.34) {
       cornerH = height * 0.34;
       cornerSize = cornerH * (corner.width / corner.height);
@@ -249,7 +293,6 @@ export default function App() {
     const countV = Math.max(1, Math.round(lineV / tileBase));
     const tileV = lineV / countV;
 
-    // Позиционируем и красим каждую часть рамки
     const et = piece('e-t');
     place(et, cornerSize - band - overlap, -band, lineH, band, 'none');
     if (et) { et.style.transformOrigin = 'top left'; paintPiece(et.style, curl, 'repeat-x', tileH, band); }
@@ -271,7 +314,6 @@ export default function App() {
     if (piece('c-bl')) { place(piece('c-bl'), -band, height + band - cornerH, cornerSize, cornerH, 'scaleY(-1)'); paintPiece(piece('c-bl').style, corner, 'no-repeat', cornerSize, cornerH); }
     if (piece('c-br')) { place(piece('c-br'), width + band - cornerSize, height + band - cornerH, cornerSize, cornerH, 'scale(-1,-1)'); paintPiece(piece('c-br').style, corner, 'no-repeat', cornerSize, cornerH); }
 
-    // Логика для герба (crest), которая прервалась в исходном коде
     const crestPiece = piece('crest');
     if (crestPiece) {
       if (crest && height > 240 && width > 320) {
@@ -290,20 +332,18 @@ export default function App() {
     }
   };
 
-  // Подкомпонент для рендеринга структуры рамки `.nz`
   const FrameDecoration = () => (
     <div className="nz">
-      {['c-tl', 'c-tr', 'c-bl', 'c-br', 'e-t', 'e-b', 'e-l', 'e-r', 'crest'].map(name => (
+      {['c-tl', 'c-tr', 'c-bl', 'c-br', 'e-t', 'e-b', 'e-l', 'e-r', 'crest'].map((name) => (
         <i key={name} data-k={name}></i>
       ))}
     </div>
   );
 
-return (
+  return (
     <div className="app">
       <div className="layout">
-        
-        {/* Карточка KPI */}
+
         <section className="card nal-cream" ref={creamCardRef}>
           <div className="kpi-grid">
             <div className="kpi-cell">
@@ -326,7 +366,6 @@ return (
           <FrameDecoration />
         </section>
 
-        {/* Главная панель управления */}
         <section className="card main-panel" ref={mainCardRef}>
           <div>
             <div className="mp-sign" id="sign">Название</div>
@@ -341,15 +380,12 @@ return (
           <FrameDecoration />
         </section>
 
-        {/* КАРТА С МОНИТОРИНГОМ И ПОЛЗУНКОМ ВРЕМЕНИ */}
         <section className="card map-panel" style={{ position: 'relative', minHeight: '450px', flexGrow: 1 }}>
-          {/* Сам контейнер, куда MapLibre вставит холст */}
-          <div 
-            ref={mapContainerRef} 
-            style={{ width: '100%', height: '100%', borderRadius: '4px', overflow: 'hidden' }} 
+          <div
+            ref={mapContainerRef}
+            style={{ width: '100%', height: '100%', borderRadius: '4px', overflow: 'hidden' }}
           />
 
-          {/* Виджет управления временем поверх карты */}
           <div className="map-time-control" style={{
             position: 'absolute',
             bottom: '20px',
@@ -359,7 +395,7 @@ return (
             borderRadius: '6px',
             boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
             zIndex: 10,
-            pointerEvents: 'auto'
+            pointerEvents: 'auto',
           }}>
             <div style={{ fontSize: '11px', color: '#666', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
               Мониторинг временной шкалы
@@ -367,12 +403,12 @@ return (
             <div style={{ margin: '4px 0 8px 0', fontSize: '16px', fontWeight: 'bold' }}>
               t_s = {currentTime} сек.
             </div>
-            <input 
-              type="range" 
-              min="0" 
-              max="3600" 
-              step="10" 
-              value={currentTime} 
+            <input
+              type="range"
+              min="0"
+              max="3600"
+              step="10"
+              value={currentTime}
               onChange={(e) => setCurrentTime(parseFloat(e.target.value))}
               style={{ width: '180px', display: 'block', cursor: 'pointer' }}
             />
@@ -383,16 +419,14 @@ return (
             )}
           </div>
 
-          {/* Накладываем фирменную рамку поверх карты */}
           <FrameDecoration />
         </section>
 
       </div>
 
-      {/* Газовая труба */}
-      <div 
-        id="pipe" 
-        title="Газовая труба · можно дёрнуть" 
+      <div
+        id="pipe"
+        title="Газовая труба · можно дёрнуть"
         className={isPipeJerked ? 'jerk' : ''}
         onClick={handlePipeClick}
         onAnimationEnd={() => setIsPipeJerked(false)}
@@ -403,7 +437,6 @@ return (
         ))}
       </div>
 
-      {/* Оверлей загрузки */}
       <div id="loadOvl" className={isLoading ? 'show' : ''} onClick={() => setIsLoading(false)}>
         <div className="frame">
           <img id="loadImg" src="sprites/loading.gif" alt="Загрузка" />
@@ -412,4 +445,4 @@ return (
       </div>
     </div>
   );
-};
+}

@@ -4,13 +4,13 @@
     --brown2: #8a3a22;
     --blue: #3b82d4;
     --body: 'IBM Plex Sans', sans-serif;
-    --btn-mid: url('sprites/btn-mid.png');
-    --cap-l: url('sprites/btn-cap-l.png');
-    --cap-r: url('sprites/btn-cap-r.png');
-    --tex-panel: url('sprites/tex-panel.png');
-    --tex-wall: url('sprites/tex-wall.png');
-    --pipe: url('sprites/pipe.png');
-    --pipe-j: url('sprites/pipe-joint.png');
+    --btn-mid: url('/sprites/btn-mid.png');
+    --cap-l: url('/sprites/btn-cap-l.png');
+    --cap-r: url('/sprites/btn-cap-r.png');
+    --tex-panel: url('/sprites/tex-panel.png');
+    --tex-wall: url('/sprites/tex-wall.png');
+    --pipe: url('/sprites/pipe.png');
+    --pipe-j: url('/sprites/pipe-joint.png');
 }
 
 * {
@@ -204,27 +204,13 @@ button {
 }
 
 @keyframes jerk {
-    0% {
-        transform: translate(0, 0) rotate(0);
-    }
-    12% {
-        transform: translate(-7px, 1px) rotate(-0.7deg);
-    }
-    28% {
-        transform: translate(6px, -1px) rotate(0.5deg);
-    }
-    45% {
-        transform: translate(-5px, 0) rotate(-0.4deg);
-    }
-    62% {
-        transform: translate(4px, 1px) rotate(0.3deg);
-    }
-    80% {
-        transform: translate(-2px, 0) rotate(-0.15deg);
-    }
-    100% {
-        transform: translate(0, 0) rotate(0);
-    }
+    0% { transform: translate(0, 0) rotate(0); }
+    12% { transform: translate(-7px, 1px) rotate(-0.7deg); }
+    28% { transform: translate(6px, -1px) rotate(0.5deg); }
+    45% { transform: translate(-5px, 0) rotate(-0.4deg); }
+    62% { transform: translate(4px, 1px) rotate(0.3deg); }
+    80% { transform: translate(-2px, 0) rotate(-0.15deg); }
+    100% { transform: translate(0, 0) rotate(0); }
 }
 
 #loadOvl {
