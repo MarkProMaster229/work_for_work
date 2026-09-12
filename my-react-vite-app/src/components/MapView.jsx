@@ -4,11 +4,10 @@ import { createRoot } from "react-dom/client";
 import "maplibre-gl/dist/maplibre-gl.css";
 import NodePopup from "./NodePopup";
 
-// Палитра — меняй здесь, если захочешь другие цвета.
 const COLORS = {
   edge:              "#3b82f6", // линии связи
-  client:            "#3b82f6", // ← КЛИЕНТ (синий)
-  gateway:           "#f59e0b", // ← ШЛЮЗ (янтарный)
+  client:            "#3b82f6", // клиент (синий)
+  gateway:           "#f59e0b", // шлюз (янтарный)
   satelliteActive:   "#ef4444", // спутник включён
   satelliteInactive: "#9ca3af", // спутник выключен
 };
@@ -18,11 +17,13 @@ export default function MapView({
   onLoaded,
   currentTime,
   onNodeOverride,
+  maxDuration = 86400,
 }) {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
   const currentTimeRef = useRef(currentTime);
   const onNodeOverrideRef = useRef(onNodeOverride);
+  const maxDurationRef = useRef(maxDuration);
   const activePopupRef = useRef(null); // {popup, root}
 
   useEffect(() => {
@@ -32,6 +33,10 @@ export default function MapView({
   useEffect(() => {
     onNodeOverrideRef.current = onNodeOverride;
   }, [onNodeOverride]);
+
+  useEffect(() => {
+    maxDurationRef.current = maxDuration;
+  }, [maxDuration]);
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
@@ -75,10 +80,8 @@ export default function MapView({
         paint: {
           "circle-radius": [
             "case",
-            // наземные станции
             ["==", ["get", "node_type"], "ground_site"],
             ["case", ["==", ["get", "role"], "gateway"], 9, 7],
-            // спутники
             ["==", ["get", "active"], true], 6,
             4,
           ],
@@ -91,7 +94,6 @@ export default function MapView({
               COLORS.satelliteActive,
               COLORS.satelliteInactive,
             ],
-            // ground_site
             [
               "case",
               ["==", ["get", "role"], "gateway"],
@@ -134,7 +136,7 @@ export default function MapView({
         }
 
         const container = document.createElement("div");
-        const popup = new maplibregl.Popup({ offset: 12, maxWidth: "300px" })
+        const popup = new maplibregl.Popup({ offset: 12, maxWidth: "320px" })
           .setLngLat(coordinates)
           .setDOMContent(container)
           .addTo(map);
@@ -155,6 +157,7 @@ export default function MapView({
             onApply={(o) => onNodeOverrideRef.current?.(o)}
             onClose={close}
             colors={COLORS}
+            maxDuration={maxDurationRef.current}
           />
         );
 

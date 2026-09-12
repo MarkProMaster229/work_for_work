@@ -12,17 +12,17 @@ const ROLE_LABEL = {
   gateway: "Шлюз",
 };
 
-// Максимум отключения — 24 часа.
-const MAX_DURATION_S = 86400;
 const MIN_DURATION_S = 60;
 const STEP_S = 60;
 
 function formatDuration(seconds) {
-  if (seconds < 3600) return `${(seconds / 60).toFixed(0)} мин`;
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  if (m === 0) return `${h} ч`;
-  return `${h} ч ${m} мин`;
+  if (!Number.isFinite(seconds) || seconds < 0) return "—";
+  const s = Math.floor(seconds);
+  if (s < 60) return `${s} с`;
+  if (s < 3600) return `${Math.round(s / 60)} мин`;
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return m ? `${h} ч ${m} мин` : `${h} ч`;
 }
 
 export default function NodePopup({
@@ -31,14 +31,20 @@ export default function NodePopup({
   onApply,
   onClose,
   colors = DEFAULT_COLORS,
+  maxDuration = 86400,
 }) {
+  const MAX_DURATION_S = Math.max(MIN_DURATION_S, maxDuration);
+
   const isSatellite = node.node_type === "satellite";
   const isGateway = !isSatellite && node.role === "gateway";
   const isClient = !isSatellite && node.role === "client";
 
+  // клиента отключать нельзя — он потребитель, а не ретранслятор
   const canDisable = isSatellite || isGateway;
 
-  const [duration, setDuration] = useState(3600); // 1 час по умолчанию
+  const [duration, setDuration] = useState(
+    Math.min(3600, MAX_DURATION_S),
+  );
   const [pending, setPending] = useState(false);
 
   const handleApply = async () => {
@@ -63,10 +69,12 @@ export default function NodePopup({
   const handleInput = (e) => {
     const v = parseInt(e.target.value, 10);
     if (Number.isNaN(v)) return;
-    setDuration(Math.max(MIN_DURATION_S, Math.min(MAX_DURATION_S, v)));
+    setDuration(
+      Math.max(MIN_DURATION_S, Math.min(MAX_DURATION_S, v)),
+    );
   };
 
-  // Быстрые кнопки
+  // Быстрые пресеты (отфильтрованы по MAX_DURATION_S)
   const presets = [
     { label: "5 мин", value: 300 },
     { label: "30 мин", value: 1800 },
@@ -74,7 +82,7 @@ export default function NodePopup({
     { label: "6 ч", value: 21600 },
     { label: "12 ч", value: 43200 },
     { label: "24 ч", value: 86400 },
-  ];
+  ].filter((p) => p.value <= MAX_DURATION_S);
 
   let accent = colors.client;
   if (isSatellite) {
@@ -124,8 +132,7 @@ export default function NodePopup({
             }}
           >
             {isSatellite ? "Отключить спутник" : "Отключить шлюз"} с{" "}
-            <b>t = {currentTime} с</b> на{" "}
-            <b>{formatDuration(duration)}</b>
+            <b>t = {currentTime} с</b> на <b>{formatDuration(duration)}</b>
           </label>
 
           {/* Быстрые пресеты */}
@@ -146,6 +153,7 @@ export default function NodePopup({
                   padding: "3px 6px",
                   border: "1px solid #ddd",
                   background: duration === p.value ? "#e5edff" : "#fff",
+                  color: "#1f2937",
                   borderRadius: 3,
                   cursor: "pointer",
                 }}
@@ -188,9 +196,13 @@ export default function NodePopup({
                 fontSize: 12,
                 border: "1px solid #ddd",
                 borderRadius: 3,
+                color: "#1f2937",
+                background: "#fff",
               }}
             />
-            <span style={{ fontSize: 11, color: "#666" }}>секунд</span>
+            <span style={{ fontSize: 11, color: "#666" }}>
+              секунд (макс. {MAX_DURATION_S})
+            </span>
           </div>
 
           <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
@@ -216,6 +228,7 @@ export default function NodePopup({
               style={{
                 padding: "6px 10px",
                 background: "#eee",
+                color: "#1f2937",
                 border: 0,
                 borderRadius: 4,
                 cursor: "pointer",
@@ -227,12 +240,19 @@ export default function NodePopup({
           </div>
         </>
       ) : (
-        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "flex-end",
+            marginTop: 8,
+          }}
+        >
           <button
             onClick={onClose}
             style={{
               padding: "6px 10px",
               background: "#eee",
+              color: "#1f2937",
               border: 0,
               borderRadius: 4,
               cursor: "pointer",

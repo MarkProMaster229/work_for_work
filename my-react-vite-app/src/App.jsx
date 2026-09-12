@@ -24,6 +24,21 @@ const EMPTY_KPI = {
 
 const EMPTY_OVERRIDES = { failures: [], gateway_outages: [] };
 
+/** Читаемое форматирование: 4320 → "1 ч 12 мин" */
+function formatTime(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return "—";
+  const s = Math.floor(seconds);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+
+  const parts = [];
+  if (h > 0) parts.push(`${h} ч`);
+  if (m > 0) parts.push(`${m} мин`);
+  if (sec > 0 || parts.length === 0) parts.push(`${sec} с`);
+  return parts.join(" ");
+}
+
 /**
  * Добавляет новый интервал в список для конкретного ID,
  * склеивая перекрывающиеся/соседние интервалы этого ID.
@@ -64,7 +79,7 @@ export default function App() {
   const [groundSites, setGroundSites] = useState([]);
   const [overrides, setOverrides] = useState(EMPTY_OVERRIDES);
   const [error, setError] = useState(null);
-  const [sliderConfig, setSliderConfig] = useState({ max: 3600, step: 10 });
+  const [sliderConfig, setSliderConfig] = useState({ max: 86400, step: 120 });
 
   const creamCardRef = useRef(null);
   const mainCardRef = useRef(null);
@@ -85,6 +100,33 @@ export default function App() {
   useEffect(() => {
     refreshGroundSites();
   }, [refreshGroundSites]);
+
+  // ---- авто-подхват горизонта сценария у бэкенда при старте ----
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const scenario = await api.exportScenario(null);
+        if (cancelled) return;
+        const env = scenario?.environment || {};
+        if (env.horizon_s) {
+          setSliderConfig({
+            max: env.horizon_s,
+            step: env.step_s ?? 120,
+          });
+        }
+        if (!scenarioName && (scenario?.meta?.title || scenario?.meta?.id)) {
+          setScenarioName(scenario.meta.title || scenario.meta.id);
+        }
+      } catch (err) {
+        console.warn("Не удалось получить горизонт сценария:", err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ---- снапшот ----
   const fetchSnapshot = useCallback(async (t_s, ovr) => {
@@ -135,8 +177,7 @@ export default function App() {
         summary.avgAvailability != null
           ? `${summary.avgAvailability.toFixed(1)}%`
           : "—",
-      maxBreak:
-        summary.maxBreak != null ? `${summary.maxBreak} с` : "—",
+      maxBreak: summary.maxBreak != null ? `${summary.maxBreak} с` : "—",
     }));
   }, []);
 
@@ -222,8 +263,8 @@ export default function App() {
 
         setScenarioName(scenario.meta?.title || scenario.meta?.id || file.name);
         setSliderConfig({
-          max: scenario.environment?.horizon_s ?? 3600,
-          step: scenario.environment?.step_s ?? 10,
+          max: scenario.environment?.horizon_s ?? 86400,
+          step: scenario.environment?.step_s ?? 120,
         });
 
         setOverrides(EMPTY_OVERRIDES);
@@ -279,6 +320,15 @@ export default function App() {
     updateAll();
   }, [updateAll]);
 
+  // Пресеты для времени — фильтруются по текущему максимуму
+  const timePresets = useMemo(
+    () =>
+      [0, 3600, 21600, 43200, 64800, 86400].filter(
+        (v) => v <= sliderConfig.max,
+      ),
+    [sliderConfig.max],
+  );
+
   return (
     <div className="app">
       <div className="layout">
@@ -303,6 +353,7 @@ export default function App() {
             onLoaded={() => setMapReady(true)}
             currentTime={currentTime}
             onNodeOverride={handleNodeOverride}
+            maxDuration={sliderConfig.max}
           />
 
           <OverridesPanel
@@ -318,12 +369,13 @@ export default function App() {
               bottom: 20,
               left: 20,
               background: "rgba(255,255,255,0.95)",
-              color: "#1f2937",              // ← тёмный текст
+              color: "#1f2937",
               padding: "12px 16px",
               borderRadius: 6,
               boxShadow: "0 4px 12px rgba(0,0,0,0.18)",
               zIndex: 10,
               pointerEvents: "auto",
+              minWidth: 260,
             }}
           >
             <div
@@ -345,7 +397,13 @@ export default function App() {
               }}
             >
               t_s = {currentTime} сек.
+              <span
+                style={{ fontSize: 12, color: "#6b7280", marginLeft: 8 }}
+              >
+                ({formatTime(currentTime)})
+              </span>
             </div>
+
             <input
               type="range"
               min="0"
@@ -353,15 +411,88 @@ export default function App() {
               step={sliderConfig.step}
               value={currentTime}
               onChange={(e) => setCurrentTime(parseFloat(e.target.value))}
-              style={{ width: 180, display: "block", cursor: "pointer" }}
+              style={{ width: "100%", display: "block", cursor: "pointer" }}
             />
+
+            {/* Поле точного ввода */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                marginTop: 8,
+              }}
+            >
+              <label
+                style={{ fontSize: 11, color: "#6b7280", minWidth: 60 }}
+              >
+                Точно, с:
+              </label>
+              <input
+                type="number"
+                min="0"
+                max={sliderConfig.max}
+                step="1"
+                value={currentTime}
+                onChange={(e) => {
+                  const v = Number(e.target.value);
+                  if (Number.isNaN(v)) return;
+                  const clamped = Math.max(
+                    0,
+                    Math.min(sliderConfig.max, v),
+                  );
+                  setCurrentTime(clamped);
+                }}
+                style={{
+                  width: 100,
+                  padding: "4px 8px",
+                  fontSize: 13,
+                  border: "1px solid #d1d5db",
+                  borderRadius: 4,
+                  color: "#1f2937",
+                  background: "#fff",
+                }}
+              />
+              <span style={{ fontSize: 11, color: "#6b7280" }}>
+                / {sliderConfig.max}
+              </span>
+            </div>
+
+            {/* Пресеты */}
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                gap: 4,
+                marginTop: 6,
+              }}
+            >
+              {timePresets.map((v) => (
+                <button
+                  key={v}
+                  onClick={() => setCurrentTime(v)}
+                  style={{
+                    fontSize: 10,
+                    padding: "3px 6px",
+                    border: "1px solid #ddd",
+                    background: currentTime === v ? "#e5edff" : "#fff",
+                    color: "#1f2937",
+                    borderRadius: 3,
+                    cursor: "pointer",
+                  }}
+                >
+                  {formatTime(v)}
+                </button>
+              ))}
+            </div>
+
             {!mapReady && (
               <span
                 style={{
                   fontSize: 10,
                   color: "#f59e0b",
                   display: "block",
-                  marginTop: 4,
+                  marginTop: 6,
                 }}
               >
                 Синхронизация потока...
@@ -379,7 +510,7 @@ export default function App() {
             margin: "12px 24px",
             padding: "12px 16px",
             background: "#f9fafb",
-            color: "#1f2937",              // ← тёмный текст
+            color: "#1f2937",
             border: "1px solid #e5e7eb",
             borderRadius: 6,
             fontSize: 13,
@@ -398,10 +529,18 @@ export default function App() {
           >
             <thead>
               <tr style={{ background: "#f3f4f6", color: "#111827" }}>
-                <th style={{ textAlign: "left", padding: "6px 12px" }}>Клиент</th>
-                <th style={{ textAlign: "right", padding: "6px 12px" }}>Доступность</th>
-                <th style={{ textAlign: "right", padding: "6px 12px" }}>Макс. перерыв</th>
-                <th style={{ textAlign: "right", padding: "6px 12px" }}>Ср. hops</th>
+                <th style={{ textAlign: "left", padding: "6px 12px" }}>
+                  Клиент
+                </th>
+                <th style={{ textAlign: "right", padding: "6px 12px" }}>
+                  Доступность
+                </th>
+                <th style={{ textAlign: "right", padding: "6px 12px" }}>
+                  Макс. перерыв
+                </th>
+                <th style={{ textAlign: "right", padding: "6px 12px" }}>
+                  Ср. hops
+                </th>
               </tr>
             </thead>
             <tbody>
