@@ -34,10 +34,8 @@ Backend:
 API будет доступен на http://localhost:5000.
 
 Frontend:
-  cd work_for_work/frontend
-  streamlit run app.py
 
-UI будет доступен на http://localhost:8501.
+позже - заполнить 
 
 ## API endpoints
 
