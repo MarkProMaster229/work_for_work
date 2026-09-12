@@ -22,6 +22,7 @@ export default function MapView({
   onSelectClient,
   selectedClient,
   maxDuration = 86400,
+  horizonS = 86400,           // ← добавлено
   routes = {},
   servingSatellites = {},
 }) {
@@ -31,6 +32,7 @@ export default function MapView({
   const onNodeOverrideRef = useRef(onNodeOverride);
   const onSelectClientRef = useRef(onSelectClient);
   const maxDurationRef = useRef(maxDuration);
+  const horizonRef = useRef(horizonS);
   const routesRef = useRef(routes);
   const servingRef = useRef(servingSatellites);
   const activePopupRef = useRef(null);
@@ -39,6 +41,7 @@ export default function MapView({
   useEffect(() => { onNodeOverrideRef.current = onNodeOverride; }, [onNodeOverride]);
   useEffect(() => { onSelectClientRef.current = onSelectClient; }, [onSelectClient]);
   useEffect(() => { maxDurationRef.current = maxDuration; }, [maxDuration]);
+  useEffect(() => { horizonRef.current = horizonS; }, [horizonS]);
   useEffect(() => { routesRef.current = routes; }, [routes]);
   useEffect(() => { servingRef.current = servingSatellites; }, [servingSatellites]);
 
@@ -154,7 +157,7 @@ export default function MapView({
         }
 
         const container = document.createElement("div");
-        const popup = new maplibregl.Popup({ offset: 12, maxWidth: "340px" })
+        const popup = new maplibregl.Popup({ offset: 12, maxWidth: "360px" })
           .setLngLat(coordinates)
           .setDOMContent(container)
           .addTo(map);
@@ -177,6 +180,7 @@ export default function MapView({
             onSelectClient={onSelectClientRef.current}
             colors={COLORS}
             maxDuration={maxDurationRef.current}
+            horizonS={horizonRef.current}
             routes={routesRef.current}
             servingSatellites={servingRef.current}
           />

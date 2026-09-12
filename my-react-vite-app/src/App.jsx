@@ -601,6 +601,7 @@ export default function App() {
             onSelectClient={setSelectedClient}
             selectedClient={selectedClient}
             maxDuration={sliderConfig.max}
+            horizonS={fullHorizon}
             routes={routes}
             servingSatellites={servingSatellites}
           />

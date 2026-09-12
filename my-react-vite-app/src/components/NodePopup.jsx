@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 
 const DEFAULT_COLORS = {
   client: "#3b82f6",
@@ -33,10 +33,17 @@ export default function NodePopup({
   onSelectClient,
   colors = DEFAULT_COLORS,
   maxDuration = 86400,
+  horizonS = 86400,
   routes = {},
   servingSatellites = {},
 }) {
-  const MAX_DURATION_S = Math.max(MIN_DURATION_S, maxDuration);
+  // Максимальная длительность: остаток до конца горизонта.
+  // Если currentTime уже на последнем отсчёте — оставляем MIN.
+  const remaining = Math.max(0, horizonS - currentTime);
+  const MAX_DURATION_S = Math.max(
+    MIN_DURATION_S,
+    Math.min(maxDuration, remaining),
+  );
 
   const isSatellite = node.node_type === "satellite";
   const isGateway = !isSatellite && node.role === "gateway";
@@ -44,10 +51,17 @@ export default function NodePopup({
 
   const canDisable = isSatellite || isGateway;
 
-  const [duration, setDuration] = useState(Math.min(3600, MAX_DURATION_S));
+  const [duration, setDuration] = useState(
+    Math.min(3600, MAX_DURATION_S),
+  );
   const [pending, setPending] = useState(false);
 
-  // --- для спутника: в чьих маршрутах он участвует ---
+  // Синхронизировать duration, если MAX_DURATION_S уменьшился
+  // (например, слайдер времени переехал ближе к концу горизонта)
+  useEffect(() => {
+    setDuration((d) => Math.max(MIN_DURATION_S, Math.min(d, MAX_DURATION_S)));
+  }, [MAX_DURATION_S]);
+
   const inRoutesFor = useMemo(() => {
     if (!isSatellite) return [];
     const out = [];
@@ -57,7 +71,6 @@ export default function NodePopup({
     return out;
   }, [isSatellite, routes, node.node_id]);
 
-  // --- для клиента: какие спутники его обслуживают сейчас ---
   const servingFor = useMemo(() => {
     if (!isClient) return [];
     const list = servingSatellites?.[node.node_id];
@@ -66,13 +79,18 @@ export default function NodePopup({
 
   const handleApply = async () => {
     if (!canDisable) return;
+    // Страховка: end_s никогда не превысит horizon
+    const safeEnd = Math.min(currentTime + duration, horizonS);
+    if (safeEnd <= currentTime) {
+      return;
+    }
     setPending(true);
     try {
       await onApply({
         id: node.node_id,
         kind: isSatellite ? "satellite" : "gateway",
         start_s: currentTime,
-        end_s: currentTime + duration,
+        end_s: safeEnd,
       });
     } finally {
       setPending(false);
@@ -88,6 +106,7 @@ export default function NodePopup({
 
   const title = isSatellite ? "Спутник" : ROLE_LABEL[node.role] || "Станция";
 
+  // Пресеты: фильтруем по MAX_DURATION_S
   const presets = [
     { label: "5 мин", value: 300 },
     { label: "30 мин", value: 1800 },
@@ -124,7 +143,6 @@ export default function NodePopup({
         </p>
       )}
 
-      {/* --- Обслуживающие спутники для клиента --- */}
       {isClient && (
         <div
           style={{
@@ -141,7 +159,6 @@ export default function NodePopup({
         </div>
       )}
 
-      {/* --- Участие в маршрутах для спутника --- */}
       {isSatellite && (
         <div
           style={{
@@ -186,6 +203,7 @@ export default function NodePopup({
       {canDisable ? (
         <>
           <hr style={{ margin: "6px 0", border: 0, borderTop: "1px solid #eee" }} />
+
           <label
             style={{
               display: "block",
@@ -198,32 +216,38 @@ export default function NodePopup({
             <b>t = {currentTime} с</b> на <b>{formatDuration(duration)}</b>
           </label>
 
-          <div
-            style={{
-              display: "flex",
-              flexWrap: "wrap",
-              gap: 4,
-              marginBottom: 8,
-            }}
-          >
-            {presets.map((p) => (
-              <button
-                key={p.value}
-                onClick={() => setDuration(p.value)}
-                style={{
-                  fontSize: 10,
-                  padding: "3px 6px",
-                  border: "1px solid #ddd",
-                  background: duration === p.value ? "#e5edff" : "#fff",
-                  color: "#1f2937",
-                  borderRadius: 3,
-                  cursor: "pointer",
-                }}
-              >
-                {p.label}
-              </button>
-            ))}
+          <div style={{ fontSize: 10, color: "#9ca3af", marginBottom: 6 }}>
+            Доступно максимум: {formatDuration(MAX_DURATION_S)} (до конца горизонта)
           </div>
+
+          {presets.length > 0 && (
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                gap: 4,
+                marginBottom: 8,
+              }}
+            >
+              {presets.map((p) => (
+                <button
+                  key={p.value}
+                  onClick={() => setDuration(p.value)}
+                  style={{
+                    fontSize: 10,
+                    padding: "3px 6px",
+                    border: "1px solid #ddd",
+                    background: duration === p.value ? "#e5edff" : "#fff",
+                    color: "#1f2937",
+                    borderRadius: 3,
+                    cursor: "pointer",
+                  }}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          )}
 
           <input
             type="range"
@@ -274,7 +298,7 @@ export default function NodePopup({
           <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
             <button
               onClick={handleApply}
-              disabled={pending}
+              disabled={pending || MAX_DURATION_S <= 0}
               style={{
                 flex: 1,
                 padding: "6px 10px",
@@ -285,6 +309,7 @@ export default function NodePopup({
                 cursor: pending ? "wait" : "pointer",
                 fontSize: 12,
                 fontWeight: 600,
+                opacity: pending || MAX_DURATION_S <= 0 ? 0.6 : 1,
               }}
             >
               {pending ? "…" : "⚡ Рассчитать"}
