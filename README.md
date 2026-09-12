@@ -11,31 +11,39 @@
 - Показывает причины отсутствия маршрута.
 - Позволяет сохранять и сравнивать варианты конфигурации.
 - Выгружает результаты в формате `cosmo-A-result-1.0`.
-
-## Запуск
-Backend (Flask API)
-
-cd work_for_work
-python3 -m api.app
+## Установка и запуск
 
 
-## Установка
+### Backend (Flask API)
 
-pip install -r requirements.txt
+Установка:
 
-Зависимости: flask, numpy. Требования: Python 3.10+.
+    pip install -r requirements.txt
 
-## Запуск
+Зависимости: flask, numpy. Требуется Python 3.10+.
 
-Backend:
-  cd work_for_work
-  python3 -m api.app
+Запуск:
+
+    cd work_for_work
+    python3 -m api.app
 
 API будет доступен на http://localhost:5000.
 
-Frontend:
+### Frontend (React + Vite)
 
-позже - заполнить 
+Установка:
+
+    cd my-react-vite-app
+    npm install
+    npm install maplibre-gl
+
+Зависимости: react, react-dom, vite, maplibre-gl. Требуется Node 18+.
+
+Запуск:
+
+    npm run dev
+
+  
 
 ## API endpoints
 
