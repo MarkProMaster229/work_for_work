@@ -130,52 +130,123 @@ def get_snapshot(scenario: dict, t_s: float) -> dict:
 # ============================================================
 # 5. ПРИМЕНЕНИЕ OVERRIDES
 # ============================================================
-
 def apply_overrides(scenario: dict, overrides: dict) -> dict:
     """
     Накладывает изменения на КОПИЮ сценария.
     Оригинал не трогает.
     
     overrides = {
-        "launch_stage": 2,
+        # environment (безопасные параметры)
+        "altitude_km": 600,
+        "inclination_deg": 85,
+        "min_elevation_deg": 15,
         "isl_range_km": 2000,
+        "target_availability": 0.85,
+        
+        # design
+        "launch_stage": 2,
         "plane_overrides": [{"plane_id": "P1", "raan_deg": 45, "phase_deg": 10}],
+        
+        # события
         "failures": [{"satellite_id": "S20", "start_s": 21600, "end_s": 43200}],
         "gateway_outages": [{"gateway_id": "G_MUR", "start_s": 0, "end_s": 3600}],
     }
     """
     new_scenario = copy.deepcopy(scenario)
+    env = new_scenario["environment"]
+    design = new_scenario["design"]
     
-    # 1. launch_stage
-    if "launch_stage" in overrides:
-        new_scenario["design"]["launch_stage"] = overrides["launch_stage"]
+    # ============================================================
+    # ENVIRONMENT — безопасные параметры
+    # ============================================================
     
-    # 2. isl_range_km
+    # Высота орбиты (200–1200 км)
+    if "altitude_km" in overrides:
+        val = overrides["altitude_km"]
+        if not (200 <= val <= 1200):
+            raise ValueError(f"altitude_km must be 200..1200, got {val}")
+        env["altitude_km"] = val
+    
+    # Наклонение (0–180°)
+    if "inclination_deg" in overrides:
+        val = overrides["inclination_deg"]
+        if not (0 < val <= 180):
+            raise ValueError(f"inclination_deg must be 0..180, got {val}")
+        env["inclination_deg"] = val
+    
+    # Минимальный угол возвышения (0–90°)
+    if "min_elevation_deg" in overrides:
+        val = overrides["min_elevation_deg"]
+        if not (0 <= val < 90):
+            raise ValueError(f"min_elevation_deg must be 0..90, got {val}")
+        env["min_elevation_deg"] = val
+    
+    # Дальность ISL (0–10000 км)
     if "isl_range_km" in overrides:
-        new_scenario["environment"]["isl_range_km"] = overrides["isl_range_km"]
+        val = overrides["isl_range_km"]
+        if not (0 < val <= 10000):
+            raise ValueError(f"isl_range_km must be 0..10000, got {val}")
+        env["isl_range_km"] = val
     
-    # 3. Изменения плоскостей
+    # Целевая доступность (0–1)
+    if "target_availability" in overrides:
+        val = overrides["target_availability"]
+        if not (0 <= val <= 1):
+            raise ValueError(f"target_availability must be 0..1, got {val}")
+        env["target_availability"] = val
+    
+    # ============================================================
+    # DESIGN — launch_stage и плоскости
+    # ============================================================
+    
+    if "launch_stage" in overrides:
+        val = overrides["launch_stage"]
+        if val not in (1, 2, 3):
+            raise ValueError(f"launch_stage must be 1, 2 or 3, got {val}")
+        design["launch_stage"] = val
+    
     if "plane_overrides" in overrides:
-        pmap = {p["id"]: p for p in new_scenario["design"]["planes"]}
+        pmap = {p["id"]: p for p in design["planes"]}
         for po in overrides["plane_overrides"]:
-            if po["plane_id"] in pmap:
-                if "raan_deg" in po:
-                    pmap[po["plane_id"]]["raan_deg"] = po["raan_deg"]
-                if "phase_deg" in po:
-                    pmap[po["plane_id"]]["phase_deg"] = po["phase_deg"]
+            if po["plane_id"] not in pmap:
+                raise ValueError(f"Unknown plane: {po['plane_id']}")
+            if "raan_deg" in po:
+                val = po["raan_deg"]
+                if not (0 <= val < 360):
+                    raise ValueError(f"raan_deg must be 0..360, got {val}")
+                pmap[po["plane_id"]]["raan_deg"] = val
+            if "phase_deg" in po:
+                val = po["phase_deg"]
+                if not (0 <= val < 360):
+                    raise ValueError(f"phase_deg must be 0..360, got {val}")
+                pmap[po["plane_id"]]["phase_deg"] = val
     
-    # 4. Отказы спутников (добавляем к существующим)
+    # ============================================================
+    # СОБЫТИЯ — отказы
+    # ============================================================
+    
+    horizon_s = env["horizon_s"]
+    
     if "failures" in overrides:
+        sat_ids = {s["id"] for s in design["satellites"]}
         for f in overrides["failures"]:
+            if f["satellite_id"] not in sat_ids:
+                raise ValueError(f"Unknown satellite: {f['satellite_id']}")
+            if not (0 <= f["start_s"] < f["end_s"] <= horizon_s):
+                raise ValueError(f"Invalid failure interval: {f}")
             new_scenario["failures"].append({
                 "satellite_id": f["satellite_id"],
                 "start_s": f["start_s"],
                 "end_s": f["end_s"],
             })
     
-    # 5. Отказы шлюзов
     if "gateway_outages" in overrides:
+        gw_ids = {g["id"] for g in new_scenario["ground_sites"] if g["role"] == "gateway"}
         for g in overrides["gateway_outages"]:
+            if g["gateway_id"] not in gw_ids:
+                raise ValueError(f"Unknown gateway: {g['gateway_id']}")
+            if not (0 <= g["start_s"] < g["end_s"] <= horizon_s):
+                raise ValueError(f"Invalid gateway outage interval: {g}")
             new_scenario["gateway_outages"].append({
                 "gateway_id": g["gateway_id"],
                 "start_s": g["start_s"],
