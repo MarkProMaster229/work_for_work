@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import * as maplibregl from 'maplibre-gl'; // Добавлен импорт библиотеки карты
-import 'maplibre-gl/dist/maplibre-gl.css'; // Импортируем стили для карты
-import './jabajaba.css'; 
+import * as maplibregl from 'maplibre-gl';
+import 'maplibre-gl/dist/maplibre-gl.css';
+import './jabajaba.css';
 import { api } from './api.jsx';
 
 function transformBackendToGeoJSON(data, groundSites = []) {
@@ -73,17 +73,23 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [pipeJoints, setPipeJoints] = useState([]);
   const [isPipeJerked, setIsPipeJerked] = useState(false);
-  const mapContainerRef = useRef(null);
-  const mapRef = useRef(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [snapshot, setSnapshot] = useState(null);
+  const [error, setError] = useState(null);
+
+  const mapContainerRef = useRef(null);
+  const mapRef = useRef(null);
   const creamCardRef = useRef(null);
   const mainCardRef = useRef(null);
-  const [snapshot, setSnapshot] = useState(null);
- const spritesRef = useRef({ curl: null, corner: null, crest: null });
-  const [error, setError] = useState(null);
+  const fileInputRef = useRef(null);
+  const groundSitesRef = useRef([]);
+  const spritesRef = useRef({ curl: null, corner: null, crest: null });
+
+  // --- Карта ---
   useEffect(() => {
     if (!mapContainerRef.current) return;
+    if (mapRef.current) return; // защита от двойного создания (StrictMode / hot reload)
 
     const map = new maplibregl.Map({
       style: 'https://tiles.openfreemap.org/styles/liberty',
@@ -167,20 +173,36 @@ export default function App() {
       setLoading(false);
     });
 
-    return () => map.remove();
+    map.on('error', (e) => {
+      console.error('MapLibre error:', e?.error || e);
+    });
+
+    return () => {
+      if (mapRef.current) {
+        mapRef.current.remove();
+        mapRef.current = null;
+      }
+    };
   }, []);
 
+  // --- Наземные станции ---
   useEffect(() => {
-    api.getGroundSites().then((data) => {
-      groundSitesRef.current = [...(data.clients || []), ...(data.gateways || [])];
-    }).catch(() => {});
+    api.getGroundSites()
+      .then((data) => {
+        groundSitesRef.current = [...(data.clients || []), ...(data.gateways || [])];
+      })
+      .catch((err) => {
+        console.error('getGroundSites failed:', err);
+      });
   }, []);
 
+  // --- Снапшот при изменении времени ---
   useEffect(() => {
     if (loading || !mapRef.current) return;
 
     api.getSnapshot(currentTime)
       .then((data) => {
+        setSnapshot(data);
         const geojson = transformBackendToGeoJSON(data, groundSitesRef.current);
         const source = mapRef.current.getSource('graph-source');
         if (source) {
@@ -188,10 +210,11 @@ export default function App() {
         }
       })
       .catch((err) => {
-        console.error("Ошибка при обновлении карты:", err);
+        console.error('Ошибка при обновлении карты:', err);
       });
   }, [currentTime, loading]);
 
+  // --- Спрайты + resize ---
   useEffect(() => {
     buildPipe();
     window.addEventListener('resize', handleResize);
@@ -242,6 +265,28 @@ export default function App() {
   const handlePipeClick = () => {
     setIsPipeJerked(false);
     setTimeout(() => setIsPipeJerked(true), 0);
+  };
+
+  // --- Загрузка сценария ---
+  const handleScenarioUpload = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const scenario = JSON.parse(e.target.result);
+        console.log('Сценарий загружен:', scenario);
+        setError(null);
+        // TODO: api.uploadScenario(scenario).then(...)
+      } catch (err) {
+        setError('Не удалось прочитать JSON: ' + err.message);
+      }
+    };
+    reader.onerror = () => setError('Ошибка чтения файла');
+    reader.readAsText(file);
+
+    event.target.value = '';
   };
 
   const paintPiece = (style, sprite, repeat, width, height) => {
@@ -370,18 +415,17 @@ export default function App() {
           <div>
             <div className="mp-sign" id="sign">Название</div>
             <div className="mp-btns">
-                           <input 
-                type="file" 
-                
-                style={{ display: 'none' }} 
+              <input
+                type="file"
+                ref={fileInputRef}
+                style={{ display: 'none' }}
                 accept=".json"
-                
+                onChange={handleScenarioUpload}
               />
 
-              {/* ОБНОВЛЕННАЯ КНОПКА */}
-              <button 
-                className="btn" 
-                
+              <button
+                className="btn"
+                onClick={() => fileInputRef.current?.click()}
               >
                 ⬆ Загрузить сценарий
               </button>
@@ -396,10 +440,9 @@ export default function App() {
         </section>
 
         <section className="card map-panel" style={{ position: 'relative', minHeight: '450px', flexGrow: 1 }}>
-          {/* Сам контейнер, куда MapLibre вставит холст */}
-          <div 
-            ref={mapContainerRef} 
-            style={{ width: '100%', height: '500px', borderRadius: '4px', overflow: 'hidden' }} 
+          <div
+            ref={mapContainerRef}
+            style={{ width: '100%', height: '500px', borderRadius: '4px', overflow: 'hidden' }}
           />
 
           <div className="map-time-control" style={{
@@ -439,6 +482,29 @@ export default function App() {
         </section>
 
       </div>
+
+      {error && (
+        <div style={{
+          position: 'fixed',
+          top: '16px',
+          right: '16px',
+          background: '#fee2e2',
+          color: '#991b1b',
+          padding: '10px 14px',
+          borderRadius: '6px',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+          zIndex: 1000,
+          fontSize: '13px',
+        }}>
+          {error}
+          <button
+            onClick={() => setError(null)}
+            style={{ marginLeft: '12px', background: 'transparent', border: 0, cursor: 'pointer', color: '#991b1b', fontWeight: 'bold' }}
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       <div
         id="pipe"
