@@ -30,6 +30,7 @@ export default function NodePopup({
   currentTime,
   onApply,
   onClose,
+  onSelectClient,
   colors = DEFAULT_COLORS,
   maxDuration = 86400,
 }) {
@@ -39,12 +40,9 @@ export default function NodePopup({
   const isGateway = !isSatellite && node.role === "gateway";
   const isClient = !isSatellite && node.role === "client";
 
-  // клиента отключать нельзя — он потребитель, а не ретранслятор
   const canDisable = isSatellite || isGateway;
 
-  const [duration, setDuration] = useState(
-    Math.min(3600, MAX_DURATION_S),
-  );
+  const [duration, setDuration] = useState(Math.min(3600, MAX_DURATION_S));
   const [pending, setPending] = useState(false);
 
   const handleApply = async () => {
@@ -62,28 +60,6 @@ export default function NodePopup({
     }
   };
 
-  const handleSlider = (e) => {
-    setDuration(parseInt(e.target.value, 10));
-  };
-
-  const handleInput = (e) => {
-    const v = parseInt(e.target.value, 10);
-    if (Number.isNaN(v)) return;
-    setDuration(
-      Math.max(MIN_DURATION_S, Math.min(MAX_DURATION_S, v)),
-    );
-  };
-
-  // Быстрые пресеты (отфильтрованы по MAX_DURATION_S)
-  const presets = [
-    { label: "5 мин", value: 300 },
-    { label: "30 мин", value: 1800 },
-    { label: "1 ч", value: 3600 },
-    { label: "6 ч", value: 21600 },
-    { label: "12 ч", value: 43200 },
-    { label: "24 ч", value: 86400 },
-  ].filter((p) => p.value <= MAX_DURATION_S);
-
   let accent = colors.client;
   if (isSatellite) {
     accent = node.active ? colors.satelliteActive : colors.satelliteInactive;
@@ -92,6 +68,15 @@ export default function NodePopup({
   }
 
   const title = isSatellite ? "Спутник" : ROLE_LABEL[node.role] || "Станция";
+
+  const presets = [
+    { label: "5 мин", value: 300 },
+    { label: "30 мин", value: 1800 },
+    { label: "1 ч", value: 3600 },
+    { label: "6 ч", value: 21600 },
+    { label: "12 ч", value: 43200 },
+    { label: "24 ч", value: 86400 },
+  ].filter((p) => p.value <= MAX_DURATION_S);
 
   return (
     <div style={{ fontFamily: "sans-serif", padding: 4, minWidth: 260 }}>
@@ -119,10 +104,34 @@ export default function NodePopup({
         </p>
       )}
 
+      {isClient && (
+        <div style={{ marginTop: 8 }}>
+          <button
+            onClick={() => {
+              onSelectClient?.(node.node_id);
+              onClose?.();
+            }}
+            style={{
+              width: "100%",
+              padding: "6px 10px",
+              background: colors.client,
+              color: "#fff",
+              border: 0,
+              borderRadius: 4,
+              cursor: "pointer",
+              fontSize: 12,
+              fontWeight: 600,
+              marginBottom: 6,
+            }}
+          >
+            🔍 Показать маршрут
+          </button>
+        </div>
+      )}
+
       {canDisable ? (
         <>
           <hr style={{ margin: "6px 0", border: 0, borderTop: "1px solid #eee" }} />
-
           <label
             style={{
               display: "block",
@@ -135,7 +144,6 @@ export default function NodePopup({
             <b>t = {currentTime} с</b> на <b>{formatDuration(duration)}</b>
           </label>
 
-          {/* Быстрые пресеты */}
           <div
             style={{
               display: "flex",
@@ -163,18 +171,16 @@ export default function NodePopup({
             ))}
           </div>
 
-          {/* Слайдер */}
           <input
             type="range"
             min={MIN_DURATION_S}
             max={MAX_DURATION_S}
             step={STEP_S}
             value={duration}
-            onChange={handleSlider}
+            onChange={(e) => setDuration(parseInt(e.target.value, 10))}
             style={{ width: "100%", display: "block", cursor: "pointer" }}
           />
 
-          {/* Ручной ввод секунд */}
           <div
             style={{
               display: "flex",
@@ -189,7 +195,13 @@ export default function NodePopup({
               max={MAX_DURATION_S}
               step={STEP_S}
               value={duration}
-              onChange={handleInput}
+              onChange={(e) => {
+                const v = parseInt(e.target.value, 10);
+                if (Number.isNaN(v)) return;
+                setDuration(
+                  Math.max(MIN_DURATION_S, Math.min(MAX_DURATION_S, v)),
+                );
+              }}
               style={{
                 width: 90,
                 padding: "3px 6px",
@@ -239,14 +251,8 @@ export default function NodePopup({
             </button>
           </div>
         </>
-      ) : (
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "flex-end",
-            marginTop: 8,
-          }}
-        >
+      ) : !isClient ? (
+        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
           <button
             onClick={onClose}
             style={{
@@ -262,7 +268,7 @@ export default function NodePopup({
             Закрыть
           </button>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

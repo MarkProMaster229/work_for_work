@@ -2,7 +2,16 @@ import React, { forwardRef, useRef } from "react";
 import FrameDecoration from "./FrameDecoration";
 
 const ControlPanel = forwardRef(function ControlPanel(
-  { scenarioName, onScenarioFile, isLoading, onToggleLoading, onExport, exporting },
+  {
+    scenarioName,
+    onScenarioFile,
+    isLoading,
+    onToggleLoading,
+    onExport,
+    exporting,
+    onExportResult,
+    exportingResult,
+  },
   ref,
 ) {
   const fileInputRef = useRef(null);
@@ -31,7 +40,10 @@ const ControlPanel = forwardRef(function ControlPanel(
             ⬆ Загрузить сценарий
           </button>
           <button className="btn" onClick={onExport} disabled={exporting}>
-            {exporting ? "…" : "⬇ Выгрузить"}
+            {exporting ? "…" : "⬇ Выгрузить сценарий"}
+          </button>
+          <button className="btn" onClick={onExportResult} disabled={exportingResult}>
+            {exportingResult ? "…" : "⬇ Выгрузить результат"}
           </button>
           <button className="btn" onClick={onToggleLoading}>
             {isLoading ? "⏸ Хватит загружаться" : "▶ Тест загрузки"}

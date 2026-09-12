@@ -15,7 +15,9 @@ function formatInterval(start, end) {
 export default function OverridesPanel({ overrides, onClear, onRecalc }) {
   const failures = overrides.failures || [];
   const outages = overrides.gateway_outages || [];
-  const total = failures.length + outages.length;
+  const planes = overrides.planes || [];
+  const stage = overrides.launch_stage;
+  const total = failures.length + outages.length + planes.length + (stage != null ? 1 : 0);
 
   if (!total) return null;
 
@@ -26,24 +28,43 @@ export default function OverridesPanel({ overrides, onClear, onRecalc }) {
         top: 12,
         right: 12,
         background: "rgba(255,255,255,0.97)",
-        color: "#1f2937",                 // ← тёмный текст
+        color: "#1f2937",
         borderRadius: 6,
         boxShadow: "0 4px 12px rgba(0,0,0,0.18)",
         padding: "10px 12px",
         zIndex: 20,
         fontSize: 12,
-        maxWidth: 300,
+        maxWidth: 320,
         lineHeight: 1.35,
       }}
     >
       <div style={{ fontWeight: 700, marginBottom: 6, color: "#111827" }}>
-        Отключения: {total}
+        Overrides: {total}
       </div>
 
+      {stage != null && (
+        <div style={{ marginBottom: 4 }}>
+          <b style={{ color: "#111827" }}>Этап:</b> очередь {stage}
+        </div>
+      )}
+
+      {planes.length > 0 && (
+        <div style={{ marginBottom: 4 }}>
+          <b style={{ color: "#111827" }}>Плоскости ({planes.length}):</b>
+          <ul style={{ margin: "2px 0 0 0", paddingLeft: 16 }}>
+            {planes.map((p) => (
+              <li key={p.id}>
+                {p.id} · RAAN {p.raan_deg}° · фаза {p.phase_deg}°
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {failures.length > 0 && (
-        <div style={{ marginBottom: 6 }}>
+        <div style={{ marginBottom: 4 }}>
           <b style={{ color: "#111827" }}>Спутники:</b>
-          <ul style={{ margin: "2px 0 0 0", paddingLeft: 16, color: "#1f2937" }}>
+          <ul style={{ margin: "2px 0 0 0", paddingLeft: 16 }}>
             {failures.map((f, i) => (
               <li key={i}>
                 {f.satellite_id} · {formatInterval(f.start_s, f.end_s)}
@@ -54,9 +75,9 @@ export default function OverridesPanel({ overrides, onClear, onRecalc }) {
       )}
 
       {outages.length > 0 && (
-        <div style={{ marginBottom: 6 }}>
+        <div style={{ marginBottom: 4 }}>
           <b style={{ color: "#111827" }}>Шлюзы:</b>
-          <ul style={{ margin: "2px 0 0 0", paddingLeft: 16, color: "#1f2937" }}>
+          <ul style={{ margin: "2px 0 0 0", paddingLeft: 16 }}>
             {outages.map((o, i) => (
               <li key={i}>
                 {o.gateway_id} · {formatInterval(o.start_s, o.end_s)}

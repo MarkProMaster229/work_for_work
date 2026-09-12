@@ -5,38 +5,36 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import NodePopup from "./NodePopup";
 
 const COLORS = {
-  edge:              "#3b82f6", // линии связи
-  client:            "#3b82f6", // клиент (синий)
-  gateway:           "#f59e0b", // шлюз (янтарный)
-  satelliteActive:   "#ef4444", // спутник включён
-  satelliteInactive: "#9ca3af", // спутник выключен
+  edge:              "#3b82f6",
+  client:            "#3b82f6",
+  gateway:           "#f59e0b",
+  satelliteActive:   "#ef4444",
+  satelliteInactive: "#9ca3af",
+  route:             "#f59e0b",
 };
 
 export default function MapView({
   geojson,
+  routeGeojson,
   onLoaded,
   currentTime,
   onNodeOverride,
+  onSelectClient,
+  selectedClient,
   maxDuration = 86400,
 }) {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
   const currentTimeRef = useRef(currentTime);
   const onNodeOverrideRef = useRef(onNodeOverride);
+  const onSelectClientRef = useRef(onSelectClient);
   const maxDurationRef = useRef(maxDuration);
-  const activePopupRef = useRef(null); // {popup, root}
+  const activePopupRef = useRef(null);
 
-  useEffect(() => {
-    currentTimeRef.current = currentTime;
-  }, [currentTime]);
-
-  useEffect(() => {
-    onNodeOverrideRef.current = onNodeOverride;
-  }, [onNodeOverride]);
-
-  useEffect(() => {
-    maxDurationRef.current = maxDuration;
-  }, [maxDuration]);
+  useEffect(() => { currentTimeRef.current = currentTime; }, [currentTime]);
+  useEffect(() => { onNodeOverrideRef.current = onNodeOverride; }, [onNodeOverride]);
+  useEffect(() => { onSelectClientRef.current = onSelectClient; }, [onSelectClient]);
+  useEffect(() => { maxDurationRef.current = maxDuration; }, [maxDuration]);
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
@@ -55,7 +53,12 @@ export default function MapView({
         data: { type: "FeatureCollection", features: [] },
       });
 
-      // ---------- Рёбра ----------
+      map.addSource("route-source", {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+
+      // обычные рёбра
       map.addLayer({
         id: "graph-edges",
         type: "line",
@@ -64,14 +67,23 @@ export default function MapView({
         paint: {
           "line-color": COLORS.edge,
           "line-width": 3,
-          "line-opacity": 0.7,
+          "line-opacity": 0.5,
         },
       });
 
-      // ---------- Узлы ----------
-      // Порядок разбора:
-      //   1) satellite  → active ? красный : серый
-      //   2) ground_site → role==gateway ? янтарный : синий
+      // маршрут — поверх рёбер
+      map.addLayer({
+        id: "route-line",
+        type: "line",
+        source: "route-source",
+        paint: {
+          "line-color": COLORS.route,
+          "line-width": 5,
+          "line-opacity": 0.95,
+        },
+      });
+
+      // узлы
       map.addLayer({
         id: "graph-nodes",
         type: "circle",
@@ -116,7 +128,6 @@ export default function MapView({
         },
       });
 
-      // ---------- Клик ----------
       map.on("click", "graph-nodes", (e) => {
         const feature = e.features[0];
         const coordinates = feature.geometry.coordinates.slice();
@@ -128,6 +139,11 @@ export default function MapView({
             feature.properties.active === true ||
             feature.properties.active === "true",
         };
+
+        // клик по клиенту — выделяем его маршрут
+        if (node.node_type === "ground_site" && node.role === "client") {
+          onSelectClientRef.current?.(node.node_id);
+        }
 
         if (activePopupRef.current) {
           activePopupRef.current.root.unmount();
@@ -156,6 +172,7 @@ export default function MapView({
             currentTime={currentTimeRef.current}
             onApply={(o) => onNodeOverrideRef.current?.(o)}
             onClose={close}
+            onSelectClient={onSelectClientRef.current}
             colors={COLORS}
             maxDuration={maxDurationRef.current}
           />
@@ -195,9 +212,22 @@ export default function MapView({
 
   useEffect(() => {
     if (!mapRef.current) return;
-    const source = mapRef.current.getSource("graph-source");
-    if (source) source.setData(geojson);
+    const src = mapRef.current.getSource("graph-source");
+    if (src) src.setData(geojson);
   }, [geojson]);
+
+  useEffect(() => {
+    if (!mapRef.current) return;
+    const src = mapRef.current.getSource("route-source");
+    if (src) {
+      src.setData(
+        routeGeojson || { type: "FeatureCollection", features: [] },
+      );
+    }
+  }, [routeGeojson]);
+
+  // смена selectedClient — перерисовать цвет ребра маршрута? сейчас не нужно,
+  // но подсветим клиента в отдельном слое позже при желании.
 
   return (
     <div

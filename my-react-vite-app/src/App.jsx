@@ -10,10 +10,19 @@ import PipeDecoration from "./components/PipeDecoration";
 import LoadingOverlay from "./components/LoadingOverlay";
 import ErrorBanner from "./components/ErrorBanner";
 import OverridesPanel from "./components/OverridesPanel";
+import AvailabilityTimeline from "./components/AvailabilityTimeline";
+import ReasonsPanel from "./components/ReasonsPanel";
+import VariantsPanel from "./components/VariantsPanel";
+import LaunchStageSelector from "./components/LaunchStageSelector";
+import PlaneEditor from "./components/PlaneEditor";
 
 import { useFrames } from "./hooks/useFrames";
 import { usePipeJoints } from "./hooks/usePipeJoints";
-import { transformBackendToGeoJSON, summarizeMetrics } from "./utils/geojson";
+import {
+  transformBackendToGeoJSON,
+  buildRouteGeoJSON,
+  summarizeMetrics,
+} from "./utils/geojson";
 
 const EMPTY_KPI = {
   minAvailability: "—",
@@ -22,16 +31,37 @@ const EMPTY_KPI = {
   activeKA: 0,
 };
 
-const EMPTY_OVERRIDES = { failures: [], gateway_outages: [] };
+const EMPTY_OVERRIDES = {
+  launch_stage: null,
+  planes: [],
+  failures: [],
+  gateway_outages: [],
+};
 
-/** Читаемое форматирование: 4320 → "1 ч 12 мин" */
+function hasAnyOverride(o) {
+  if (!o) return false;
+  if (o.launch_stage != null) return true;
+  if ((o.planes?.length || 0) > 0) return true;
+  if ((o.failures?.length || 0) > 0) return true;
+  if ((o.gateway_outages?.length || 0) > 0) return true;
+  return false;
+}
+
+function cleanOverrides(o) {
+  const out = {};
+  if (o.launch_stage != null) out.launch_stage = o.launch_stage;
+  if (o.planes?.length) out.planes = o.planes;
+  if (o.failures?.length) out.failures = o.failures;
+  if (o.gateway_outages?.length) out.gateway_outages = o.gateway_outages;
+  return out;
+}
+
 function formatTime(seconds) {
   if (!Number.isFinite(seconds) || seconds < 0) return "—";
   const s = Math.floor(seconds);
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
   const sec = s % 60;
-
   const parts = [];
   if (h > 0) parts.push(`${h} ч`);
   if (m > 0) parts.push(`${m} мин`);
@@ -39,19 +69,13 @@ function formatTime(seconds) {
   return parts.join(" ");
 }
 
-/**
- * Добавляет новый интервал в список для конкретного ID,
- * склеивая перекрывающиеся/соседние интервалы этого ID.
- */
 function addOrMergeInterval(list, idKey, newItem) {
   const sameId = list.filter((x) => x[idKey] === newItem[idKey]);
   const others = list.filter((x) => x[idKey] !== newItem[idKey]);
-
   const all = [
     ...sameId.map((x) => [x.start_s, x.end_s]),
     [newItem.start_s, newItem.end_s],
   ].sort((a, b) => a[0] - b[0]);
-
   const merged = [];
   for (const [s, e] of all) {
     if (merged.length && s <= merged[merged.length - 1][1]) {
@@ -60,7 +84,6 @@ function addOrMergeInterval(list, idKey, newItem) {
       merged.push([s, e]);
     }
   }
-
   return [
     ...others,
     ...merged.map(([s, e]) => ({ [idKey]: newItem[idKey], start_s: s, end_s: e })),
@@ -73,6 +96,7 @@ export default function App() {
   const [scenarioName, setScenarioName] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [exportingResult, setExportingResult] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [mapReady, setMapReady] = useState(false);
   const [snapshot, setSnapshot] = useState(null);
@@ -81,13 +105,28 @@ export default function App() {
   const [error, setError] = useState(null);
   const [sliderConfig, setSliderConfig] = useState({ max: 86400, step: 120 });
 
+  // Плоскости исходного сценария — сюда попадают из /api/scenario/export и файла
+  const [initialPlanes, setInitialPlanes] = useState([]);
+
+  const [selectedClient, setSelectedClient] = useState(null);
+
+  const [variants, setVariants] = useState([]);
+  const [compareResult, setCompareResult] = useState(null);
+  const [variantsBusy, setVariantsBusy] = useState(false);
+  const [recalcBusy, setRecalcBusy] = useState(false);
+
   const creamCardRef = useRef(null);
   const mainCardRef = useRef(null);
 
   const { joints, jerked, jerk, clearJerk } = usePipeJoints();
   const { updateAll } = useFrames([creamCardRef, mainCardRef]);
 
-  // ---- наземные станции ----
+  const clients = useMemo(
+    () => groundSites.filter((s) => s.role === "client"),
+    [groundSites],
+  );
+
+  // ---- станции ----
   const refreshGroundSites = useCallback(async () => {
     try {
       const data = await api.getGroundSites();
@@ -101,12 +140,26 @@ export default function App() {
     refreshGroundSites();
   }, [refreshGroundSites]);
 
-  // ---- авто-подхват горизонта сценария у бэкенда при старте ----
+  // ---- варианты ----
+  const refreshVariants = useCallback(async () => {
+    try {
+      const data = await api.listVariants();
+      setVariants(data?.variants || []);
+    } catch (err) {
+      console.warn("listVariants failed:", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshVariants();
+  }, [refreshVariants]);
+
+  // ---- авто-подхват сценария: горизонт + плоскости ----
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const scenario = await api.exportScenario(null);
+        const scenario = await api.exportScenario({});
         if (cancelled) return;
         const env = scenario?.environment || {};
         if (env.horizon_s) {
@@ -115,11 +168,14 @@ export default function App() {
             step: env.step_s ?? 120,
           });
         }
+        if (scenario?.design?.planes?.length) {
+          setInitialPlanes(scenario.design.planes);
+        }
         if (!scenarioName && (scenario?.meta?.title || scenario?.meta?.id)) {
           setScenarioName(scenario.meta.title || scenario.meta.id);
         }
       } catch (err) {
-        console.warn("Не удалось получить горизонт сценария:", err);
+        console.warn("Не удалось получить сценарий:", err);
       }
     })();
     return () => {
@@ -130,10 +186,9 @@ export default function App() {
 
   // ---- снапшот ----
   const fetchSnapshot = useCallback(async (t_s, ovr) => {
-    const hasOvr =
-      (ovr.failures?.length || 0) + (ovr.gateway_outages?.length || 0) > 0;
-    const data = hasOvr
-      ? await api.getSnapshotWithOverrides(t_s, ovr)
+    const clean = cleanOverrides(ovr);
+    const data = hasAnyOverride(ovr)
+      ? await api.getSnapshotWithOverrides(t_s, clean)
       : await api.getSnapshot(t_s);
     setSnapshot(data);
     return data;
@@ -158,10 +213,16 @@ export default function App() {
     };
   }, [currentTime, mapReady, overrides, fetchSnapshot]);
 
+  // ---- GeoJSON ----
   const geojson = useMemo(() => {
     if (!snapshot) return { type: "FeatureCollection", features: [] };
     return transformBackendToGeoJSON(snapshot, groundSites);
   }, [snapshot, groundSites]);
+
+  const routeGeojson = useMemo(() => {
+    if (!snapshot) return { type: "FeatureCollection", features: [] };
+    return buildRouteGeoJSON(snapshot, groundSites, selectedClient);
+  }, [snapshot, groundSites, selectedClient]);
 
   // ---- метрики ----
   const applyMetrics = useCallback((calcResult) => {
@@ -183,11 +244,16 @@ export default function App() {
 
   const recalcAll = useCallback(
     async (ovr) => {
-      const hasOvr =
-        (ovr.failures?.length || 0) + (ovr.gateway_outages?.length || 0) > 0;
-      const calc = await api.calculate(hasOvr ? ovr : null);
-      applyMetrics(calc);
-      await fetchSnapshot(currentTime, ovr);
+      setRecalcBusy(true);
+      try {
+        const clean = cleanOverrides(ovr);
+        const calc = await api.calculate(hasAnyOverride(ovr) ? clean : null);
+        applyMetrics(calc);
+        await fetchSnapshot(currentTime, ovr);
+        return calc;
+      } finally {
+        setRecalcBusy(false);
+      }
     },
     [applyMetrics, fetchSnapshot, currentTime],
   );
@@ -195,24 +261,21 @@ export default function App() {
   // ---- клик по узлу ----
   const handleNodeOverride = useCallback(
     async ({ id, kind, start_s, end_s }) => {
-      if (kind !== "satellite" && kind !== "gateway") {
-        console.warn("Отключение разрешено только для спутников и шлюзов");
-        return;
-      }
+      if (kind !== "satellite" && kind !== "gateway") return;
 
       let next;
       if (kind === "satellite") {
         next = {
+          ...overrides,
           failures: addOrMergeInterval(overrides.failures || [], "satellite_id", {
             satellite_id: id,
             start_s,
             end_s,
           }),
-          gateway_outages: [...(overrides.gateway_outages || [])],
         };
       } else {
         next = {
-          failures: [...(overrides.failures || [])],
+          ...overrides,
           gateway_outages: addOrMergeInterval(
             overrides.gateway_outages || [],
             "gateway_id",
@@ -220,19 +283,58 @@ export default function App() {
           ),
         };
       }
-
       setOverrides(next);
-
       try {
         await recalcAll(next);
       } catch (err) {
-        console.error("recalc after override failed:", err);
+        console.error("recalc failed:", err);
         setError("Не удалось пересчитать: " + err.message);
       }
     },
     [overrides, recalcAll],
   );
 
+  // ---- смена launch_stage ----
+  const handleLaunchStage = useCallback(
+    async (stage) => {
+      const next = { ...overrides, launch_stage: stage };
+      setOverrides(next);
+      try {
+        await recalcAll(next);
+      } catch (err) {
+        console.error("launch_stage recalc failed:", err);
+        setError("Не удалось пересчитать: " + err.message);
+      }
+    },
+    [overrides, recalcAll],
+  );
+
+  // ---- редактирование плоскостей ----
+  const handlePlanesApply = useCallback(
+    async (planes) => {
+      const next = { ...overrides, planes };
+      setOverrides(next);
+      try {
+        await recalcAll(next);
+      } catch (err) {
+        console.error("planes recalc failed:", err);
+        setError("Не удалось пересчитать: " + err.message);
+      }
+    },
+    [overrides, recalcAll],
+  );
+
+  const handlePlanesReset = useCallback(async () => {
+    const next = { ...overrides, planes: [] };
+    setOverrides(next);
+    try {
+      await recalcAll(next);
+    } catch (err) {
+      console.error("planes reset failed:", err);
+    }
+  }, [overrides, recalcAll]);
+
+  // ---- очистка ----
   const handleClearOverrides = useCallback(async () => {
     setOverrides(EMPTY_OVERRIDES);
     try {
@@ -257,7 +359,6 @@ export default function App() {
       try {
         const text = await file.text();
         const scenario = JSON.parse(text);
-
         const info = await api.loadScenario(scenario);
         console.log("Сценарий принят бэкендом:", info);
 
@@ -266,9 +367,13 @@ export default function App() {
           max: scenario.environment?.horizon_s ?? 86400,
           step: scenario.environment?.step_s ?? 120,
         });
-
+        if (scenario.design?.planes?.length) {
+          setInitialPlanes(scenario.design.planes);
+        }
         setOverrides(EMPTY_OVERRIDES);
         setPerClientMetrics(null);
+        setCompareResult(null);
+        setSelectedClient(null);
         setCurrentTime(0);
         await refreshGroundSites();
 
@@ -277,7 +382,6 @@ export default function App() {
 
         const calc = await api.calculate();
         applyMetrics(calc);
-
         setError(null);
       } catch (err) {
         console.error("handleScenarioFile:", err);
@@ -287,16 +391,14 @@ export default function App() {
     [refreshGroundSites, applyMetrics],
   );
 
-  // ---- выгрузка ----
+  // ---- выгрузка сценария ----
   const handleExport = useCallback(async () => {
     setExporting(true);
     try {
-      const hasOvr =
-        (overrides.failures?.length || 0) +
-          (overrides.gateway_outages?.length || 0) >
-        0;
-      const data = await api.exportScenario(hasOvr ? overrides : null);
-
+      const clean = cleanOverrides(overrides);
+      const data = await api.exportScenario(
+        hasAnyOverride(overrides) ? clean : {},
+      );
       const blob = new Blob([JSON.stringify(data, null, 2)], {
         type: "application/json",
       });
@@ -316,18 +418,95 @@ export default function App() {
     }
   }, [overrides]);
 
+  // ---- выгрузка результата ----
+  const handleExportResult = useCallback(async () => {
+    setExportingResult(true);
+    try {
+      const clean = cleanOverrides(overrides);
+      const data = await api.exportResult(
+        hasAnyOverride(overrides) ? clean : null,
+      );
+      const blob = new Blob([JSON.stringify(data, null, 2)], {
+        type: "application/json",
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `result-${Date.now()}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("exportResult failed:", err);
+      setError("Не удалось выгрузить результат: " + err.message);
+    } finally {
+      setExportingResult(false);
+    }
+  }, [overrides]);
+
+  // ---- варианты ----
+  const handleSaveVariant = useCallback(
+    async (name, ovr, description) => {
+      setVariantsBusy(true);
+      try {
+        await api.saveVariant(name, cleanOverrides(ovr), description);
+        await refreshVariants();
+      } catch (err) {
+        setError("Не удалось сохранить вариант: " + err.message);
+      } finally {
+        setVariantsBusy(false);
+      }
+    },
+    [refreshVariants],
+  );
+
+  const handleDeleteVariant = useCallback(
+    async (name) => {
+      setVariantsBusy(true);
+      try {
+        await api.deleteVariant(name);
+        await refreshVariants();
+        if (
+          compareResult?.variant_a?.name === name ||
+          compareResult?.variant_b?.name === name
+        ) {
+          setCompareResult(null);
+        }
+      } catch (err) {
+        setError("Не удалось удалить вариант: " + err.message);
+      } finally {
+        setVariantsBusy(false);
+      }
+    },
+    [refreshVariants, compareResult],
+  );
+
+  const handleCompare = useCallback(async (a, b) => {
+    setVariantsBusy(true);
+    try {
+      const result = await api.compareVariants(a, b);
+      setCompareResult(result);
+    } catch (err) {
+      setError("Не удалось сравнить варианты: " + err.message);
+    } finally {
+      setVariantsBusy(false);
+    }
+  }, []);
+
   useEffect(() => {
     updateAll();
   }, [updateAll]);
 
-  // Пресеты для времени — фильтруются по текущему максимуму
   const timePresets = useMemo(
     () =>
-      [0, 3600, 21600, 43200, 64800, 86400].filter(
-        (v) => v <= sliderConfig.max,
-      ),
+      [0, 3600, 21600, 43200, 64800, 86400].filter((v) => v <= sliderConfig.max),
     [sliderConfig.max],
   );
+
+  const selectedMetrics = selectedClient
+    ? perClientMetrics?.[selectedClient]
+    : null;
 
   return (
     <div className="app">
@@ -342,6 +521,22 @@ export default function App() {
           onToggleLoading={() => setIsLoading(!isLoading)}
           onExport={handleExport}
           exporting={exporting}
+          onExportResult={handleExportResult}
+          exportingResult={exportingResult}
+        />
+
+        <LaunchStageSelector
+          value={overrides.launch_stage}
+          onChange={handleLaunchStage}
+          disabled={!mapReady || recalcBusy}
+        />
+
+        <PlaneEditor
+          initialPlanes={initialPlanes}
+          appliedPlanes={overrides.planes}
+          onApply={handlePlanesApply}
+          onReset={handlePlanesReset}
+          busy={recalcBusy}
         />
 
         <section
@@ -350,9 +545,12 @@ export default function App() {
         >
           <MapView
             geojson={geojson}
+            routeGeojson={routeGeojson}
             onLoaded={() => setMapReady(true)}
             currentTime={currentTime}
             onNodeOverride={handleNodeOverride}
+            onSelectClient={setSelectedClient}
+            selectedClient={selectedClient}
             maxDuration={sliderConfig.max}
           />
 
@@ -397,9 +595,7 @@ export default function App() {
               }}
             >
               t_s = {currentTime} сек.
-              <span
-                style={{ fontSize: 12, color: "#6b7280", marginLeft: 8 }}
-              >
+              <span style={{ fontSize: 12, color: "#6b7280", marginLeft: 8 }}>
                 ({formatTime(currentTime)})
               </span>
             </div>
@@ -414,7 +610,6 @@ export default function App() {
               style={{ width: "100%", display: "block", cursor: "pointer" }}
             />
 
-            {/* Поле точного ввода */}
             <div
               style={{
                 display: "flex",
@@ -423,9 +618,7 @@ export default function App() {
                 marginTop: 8,
               }}
             >
-              <label
-                style={{ fontSize: 11, color: "#6b7280", minWidth: 60 }}
-              >
+              <label style={{ fontSize: 11, color: "#6b7280", minWidth: 60 }}>
                 Точно, с:
               </label>
               <input
@@ -437,11 +630,7 @@ export default function App() {
                 onChange={(e) => {
                   const v = Number(e.target.value);
                   if (Number.isNaN(v)) return;
-                  const clamped = Math.max(
-                    0,
-                    Math.min(sliderConfig.max, v),
-                  );
-                  setCurrentTime(clamped);
+                  setCurrentTime(Math.max(0, Math.min(sliderConfig.max, v)));
                 }}
                 style={{
                   width: 100,
@@ -458,7 +647,6 @@ export default function App() {
               </span>
             </div>
 
-            {/* Пресеты */}
             <div
               style={{
                 display: "flex",
@@ -505,6 +693,37 @@ export default function App() {
       </div>
 
       {perClientMetrics && (
+        <AvailabilityTimeline
+          clients={clients}
+          perClientMetrics={perClientMetrics}
+          maxTime={sliderConfig.max}
+          currentTime={currentTime}
+          selectedClient={selectedClient}
+          onSelectClient={setSelectedClient}
+        />
+      )}
+
+      {selectedMetrics && (
+        <ReasonsPanel
+          clientId={selectedClient}
+          reasons={selectedMetrics.reasons}
+          maxGapS={selectedMetrics.max_gap_s}
+          pathPct={selectedMetrics.path_pct}
+        />
+      )}
+
+      <VariantsPanel
+        overrides={overrides}
+        variants={variants}
+        onSave={handleSaveVariant}
+        onDelete={handleDeleteVariant}
+        onCompare={handleCompare}
+        compareResult={compareResult}
+        onClearCompare={() => setCompareResult(null)}
+        busy={variantsBusy}
+      />
+
+      {perClientMetrics && (
         <div
           style={{
             margin: "12px 24px",
@@ -523,41 +742,55 @@ export default function App() {
               marginTop: 8,
               borderCollapse: "collapse",
               width: "100%",
-              maxWidth: 640,
+              maxWidth: 720,
               color: "#1f2937",
             }}
           >
             <thead>
               <tr style={{ background: "#f3f4f6", color: "#111827" }}>
-                <th style={{ textAlign: "left", padding: "6px 12px" }}>
-                  Клиент
-                </th>
-                <th style={{ textAlign: "right", padding: "6px 12px" }}>
-                  Доступность
-                </th>
-                <th style={{ textAlign: "right", padding: "6px 12px" }}>
-                  Макс. перерыв
-                </th>
-                <th style={{ textAlign: "right", padding: "6px 12px" }}>
-                  Ср. hops
-                </th>
+                <th style={{ textAlign: "left", padding: "6px 12px" }}>Клиент</th>
+                <th style={{ textAlign: "right", padding: "6px 12px" }}>Доступность</th>
+                <th style={{ textAlign: "right", padding: "6px 12px" }}>Макс. перерыв</th>
+                <th style={{ textAlign: "right", padding: "6px 12px" }}>Ср. hops</th>
+                <th style={{ textAlign: "center", padding: "6px 12px" }}>90%</th>
               </tr>
             </thead>
             <tbody>
-              {Object.entries(perClientMetrics).map(([id, m]) => (
-                <tr key={id} style={{ borderTop: "1px solid #e5e7eb" }}>
-                  <td style={{ padding: "6px 12px" }}>{id}</td>
-                  <td style={{ textAlign: "right", padding: "6px 12px" }}>
-                    {m.path_pct != null ? `${m.path_pct.toFixed(2)}%` : "—"}
-                  </td>
-                  <td style={{ textAlign: "right", padding: "6px 12px" }}>
-                    {m.max_gap_s != null ? `${m.max_gap_s} с` : "—"}
-                  </td>
-                  <td style={{ textAlign: "right", padding: "6px 12px" }}>
-                    {m.avg_hops != null ? m.avg_hops.toFixed(2) : "—"}
-                  </td>
-                </tr>
-              ))}
+              {Object.entries(perClientMetrics).map(([id, m]) => {
+                const ok = (m.path_pct ?? 0) >= 90;
+                return (
+                  <tr
+                    key={id}
+                    style={{
+                      borderTop: "1px solid #e5e7eb",
+                      background: selectedClient === id ? "#eff6ff" : "transparent",
+                      cursor: "pointer",
+                    }}
+                    onClick={() => setSelectedClient(id)}
+                  >
+                    <td style={{ padding: "6px 12px", fontWeight: 600 }}>{id}</td>
+                    <td style={{ textAlign: "right", padding: "6px 12px" }}>
+                      {m.path_pct != null ? `${m.path_pct.toFixed(2)}%` : "—"}
+                    </td>
+                    <td style={{ textAlign: "right", padding: "6px 12px" }}>
+                      {m.max_gap_s != null ? `${m.max_gap_s} с` : "—"}
+                    </td>
+                    <td style={{ textAlign: "right", padding: "6px 12px" }}>
+                      {m.avg_hops != null ? m.avg_hops.toFixed(2) : "—"}
+                    </td>
+                    <td
+                      style={{
+                        textAlign: "center",
+                        padding: "6px 12px",
+                        color: ok ? "#16a34a" : "#dc2626",
+                        fontWeight: 600,
+                      }}
+                    >
+                      {ok ? "OK" : "НЕ ДОСТИГНУТ"}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

@@ -50,7 +50,44 @@ export function transformBackendToGeoJSON(data, groundSites = []) {
   return { type: "FeatureCollection", features };
 }
 
-/** Считает сводку по клиентам из ответа /calculate */
+/**
+ * Строит GeoJSON LineString по маршруту выбранного клиента
+ * из data.routes[clientId] = ["C65", "S20", "G_MUR"].
+ */
+export function buildRouteGeoJSON(data, groundSites, selectedClient) {
+  if (!selectedClient) return emptyFC();
+  const path = data?.routes?.[selectedClient];
+  if (!Array.isArray(path) || path.length < 2) return emptyFC();
+
+  const coordsMap = {};
+  for (const s of data.satellites || []) coordsMap[s.id] = [s.lon, s.lat];
+  for (const g of groundSites || []) coordsMap[g.id] = [g.lon, g.lat];
+
+  const coords = [];
+  for (const id of path) {
+    if (coordsMap[id]) coords.push(coordsMap[id]);
+  }
+  if (coords.length < 2) return emptyFC();
+
+  return {
+    type: "FeatureCollection",
+    features: [
+      {
+        type: "Feature",
+        geometry: { type: "LineString", coordinates: coords },
+        properties: { client_id: selectedClient, hops: path.length - 1 },
+      },
+    ],
+  };
+}
+
+function emptyFC() {
+  return { type: "FeatureCollection", features: [] };
+}
+
+/**
+ * Сводка метрик по клиентам из ответа POST /api/calculate.
+ */
 export function summarizeMetrics(calcResult) {
   const metrics = calcResult?.metrics || {};
   const ids = Object.keys(metrics);
