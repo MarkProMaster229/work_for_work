@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import * as maplibregl from 'maplibre-gl';
-import 'maplibre-gl/dist/maplibre-gl.css';
-import './jabajaba.css';
+import * as maplibregl from 'maplibre-gl'; // Добавлен импорт библиотеки карты
+import 'maplibre-gl/dist/maplibre-gl.css'; // Импортируем стили для карты
+import './jabajaba.css'; 
 import { api } from './api.jsx';
 
 function transformBackendToGeoJSON(data, groundSites = []) {
@@ -79,9 +79,9 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const creamCardRef = useRef(null);
   const mainCardRef = useRef(null);
-  const spritesRef = useRef({ curl: null, corner: null, crest: null });
-  const groundSitesRef = useRef([]);
-
+  const [snapshot, setSnapshot] = useState(null);
+ const spritesRef = useRef({ curl: null, corner: null, crest: null });
+  const [error, setError] = useState(null);
   useEffect(() => {
     if (!mapContainerRef.current) return;
 
@@ -370,7 +370,22 @@ export default function App() {
           <div>
             <div className="mp-sign" id="sign">Название</div>
             <div className="mp-btns">
-              <button className="btn">⬆ Загрузить сценарий</button>
+                           <input 
+                type="file" 
+                ref={fileInputRef} 
+                style={{ display: 'none' }} 
+                accept=".json"
+                onChange={handleScenarioUpload} 
+              />
+
+              {/* ОБНОВЛЕННАЯ КНОПКА */}
+              <button 
+                className="btn" 
+                onClick={() => fileInputRef.current?.click()}
+              >
+                ⬆ Загрузить сценарий
+              </button>
+
               <button className="btn">⬇ Выгрузить</button>
               <button className="btn" onClick={() => setIsLoading(!isLoading)}>
                 {isLoading ? '⏸ Хватит загружаться' : '▶ Тест загрузки'}
@@ -381,9 +396,10 @@ export default function App() {
         </section>
 
         <section className="card map-panel" style={{ position: 'relative', minHeight: '450px', flexGrow: 1 }}>
-          <div
-            ref={mapContainerRef}
-            style={{ width: '100%', height: '100%', borderRadius: '4px', overflow: 'hidden' }}
+          {/* Сам контейнер, куда MapLibre вставит холст */}
+          <div 
+            ref={mapContainerRef} 
+            style={{ width: '100%', height: '100%', borderRadius: '4px', overflow: 'hidden' }} 
           />
 
           <div className="map-time-control" style={{
