@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>test123</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="jabajaba.css">
+</head>
+<body>
+<div class="app">
+    <div class="layout">
+
+        <section class="card nal-cream">
+            <div class="kpi-grid">
+                <div class="kpi-cell">
+                    <div class="k-l">Доступность · мин. по пунктам</div>
+                    <div class="k-v">—</div>
+                </div>
+                <div class="kpi-cell">
+                    <div class="k-l">Доступность · средняя</div>
+                    <div class="k-v">—</div>
+                </div>
+                <div class="kpi-cell">
+                    <div class="k-l">Макс. перерыв связи</div>
+                    <div class="k-v">—</div>
+                </div>
+                <div class="kpi-cell">
+                    <div class="k-l">Активные КА сейчас</div>
+                    <div class="k-v">0</div>
+                </div>
+            </div>
+        </section>
+
+        <section class="card main-panel">
+            <div>
+                <div class="mp-sign" id="sign">Название</div>
+                <div class="mp-btns">
+                    <button class="btn">⬆ Загрузить сценарий</button>
+                    <button class="btn">⬇ Выгрузить</button>
+                    <button class="btn" id="btnLoad">▶ Тест загрузки</button>
+                </div>
+            </div>
+        </section>
+
+    </div>
+</div>
+
+<div id="pipe" title="Газовая труба · можно дёрнуть">
+    <div class="pipe-body"></div>
+</div>
+
+<div id="loadOvl">
+    <div class="frame">
+        <img id="loadImg" src="sprites/loading.gif" alt="">
+    </div>
+    <div class="lt">ЗАГРУЗКА ДАННЫХ…</div>
+</div>
+
+<script>
+'use strict';
+
+var pipe = document.getElementById('pipe');
+var loadOverlay = document.getElementById('loadOvl');
+var loadButton = document.getElementById('btnLoad');
+
+var curlSprite = null;
+var cornerSprite = null;
+var crestSprite = null;
+
+function loadSprite(path) {
+    return new Promise(function (resolve, reject) {
+        var image = new Image();
+        image.onload = function () {
+            resolve({
+                url: path,
+                width: image.naturalWidth,
+                height: image.naturalHeight
+            });
+        };
+        image.onerror = function () {
+            reject(new Error('не удалось загрузить файл ' + path));
+        };
+        image.src = path;
+    });
+}
+
+function buildPipe() {
+    var height = window.innerHeight;
+    var spots = [0.18, 0.51, 0.86];
+    if (Math.random() < 0.35) {
+        spots = [0.28, 0.74];
+    }
+    var old = pipe.querySelectorAll('.pipe-joint');
+    for (var i = 0; i < old.length; i++) {
+        old[i].remove();
+    }
+    for (var j = 0; j < spots.length; j++) {
+        var joint = document.createElement('i');
+        joint.className = 'pipe-joint';
+        joint.style.top = Math.round(height * spots[j]) + 'px';
+        pipe.appendChild(joint);
+    }
+}
+
+pipe.addEventListener('click', function () {
+    pipe.classList.remove('jerk');
+    void pipe.offsetWidth;
+    pipe.classList.add('jerk');
+});
+
+pipe.addEventListener('animationend', function () {
+    pipe.classList.remove('jerk');
+});
+
+loadButton.addEventListener('click', function () {
+    var shown = loadOverlay.classList.toggle('show');
+    if (shown) {
+        loadButton.textContent = '⏸ Хватит загружаться';
+    } else {
+        loadButton.textContent = '▶ Тест загрузки';
+    }
+});
+
+loadOverlay.addEventListener('click', function () {
+    loadOverlay.classList.remove('show');
+    loadButton.textContent = '▶ Тест загрузки';
+});
+
+function paintPiece(piece, sprite, repeat, width, height) {
+    piece.style.maskImage = 'url(' + sprite.url + ')';
+    piece.style.webkitMaskImage = 'url(' + sprite.url + ')';
+    piece.style.maskRepeat = repeat;
+    piece.style.webkitMaskRepeat = repeat;
+    piece.style.maskSize = width + 'px ' + height + 'px';
+    piece.style.webkitMaskSize = width + 'px ' + height + 'px';
+}
+
+function makeFrame(card) {
+    var frame = card.querySelector('.nz');
+    if (frame) {
+        return frame;
+    }
+    frame = document.createElement('div');
+    frame.className = 'nz';
+    var names = ['c-tl', 'c-tr', 'c-bl', 'c-br', 'e-t', 'e-b', 'e-l', 'e-r', 'crest'];
+    for (var i = 0; i < names.length; i++) {
+        var piece = document.createElement('i');
+        piece.dataset.k = names[i];
+        frame.appendChild(piece);
+    }
+    card.appendChild(frame);
+    return frame;
+}
+
+function layoutFrame(card) {
+    if (!curlSprite || !cornerSprite) {
+        return;
+    }
+    var width = card.clientWidth;
+    var height = card.clientHeight;
+    if (!width || !height || width < 90 || height < 90) {
+        return;
+    }
+    var frame = makeFrame(card);
+
+    function piece(name) {
+        return frame.querySelector('[data-k="' + name + '"]');
+    }
+
+    function place(el, left, top, w, h, transform) {
+        el.style.left = left + 'px';
+        el.style.top = top + 'px';
+        el.style.width = w + 'px';
+        el.style.height = h + 'px';
+        el.style.transform = transform;
+    }
+
+    var band = Math.min(30, height * 0.22);
+    var cornerSize = Math.min(88, width * 0.34);
+    var cornerH = cornerSize * (cornerSprite.height / cornerSprite.width);
+    if (cornerH > height * 0.34) {
+        cornerH = height * 0.34;
+        cornerSize = cornerH * (cornerSprite.width / cornerSprite.height);
+    }
+    var overlap = Math.min(cornerSize * 0.35, 26);
+    var tileBase = band * (curlSprite.width / curlSprite.height);
+
+    var lineH = Math.max(tileBase, width - 2 * (cornerSize - band) + 2 * overlap);
+    var countH = Math.max(1, Math.round(lineH / tileBase));
+    var tileH = lineH / countH;
+
+    var lineV = Math.max(tileBase, height - 2 * (cornerH - band) + 2 * overlap);
+    var countV = Math.max(1, Math.round(lineV / tileBase));
+    var tileV = lineV / countV;
+
+    place(piece('e-t'), cornerSize - band - overlap, -band, lineH, band, 'none');
+    piece('e-t').style.transformOrigin = 'top left';
+    paintPiece(piece('e-t'), curlSprite, 'repeat-x', tileH, band);
+
+    place(piece('e-b'), cornerSize - band - overlap, height, lineH, band, 'scaleY(-1)');
+    piece('e-b').style.transformOrigin = 'center';
+    paintPiece(piece('e-b'), curlSprite, 'repeat-x', tileH, band);
+
+    place(piece('e-l'), -band, height - (cornerH - band) + overlap, lineV, band, 'rotate(-90deg)');
+    piece('e-l').style.transformOrigin = 'top left';
+    paintPiece(piece('e-l'), curlSprite, 'repeat-x', tileV, band);
+
+    place(piece('e-r'), width + band, cornerH - band - overlap, lineV, band, 'rotate(90deg)');
+    piece('e-r').style.transformOrigin = 'top left';
+    paintPiece(piece('e-r'), curlSprite, 'repeat-x', tileV, band);
+
+    place(piece('c-tl'), -band, -band, cornerSize, cornerH, 'none');
+    paintPiece(piece('c-tl'), cornerSprite, 'no-repeat', cornerSize, cornerH);
+
+    place(piece('c-tr'), width + band - cornerSize, -band, cornerSize, cornerH, 'scaleX(-1)');
+    paintPiece(piece('c-tr'), cornerSprite, 'no-repeat', cornerSize, cornerH);
+
+    place(piece('c-bl'), -band, height + band - cornerH, cornerSize, cornerH, 'scaleY(-1)');
+    paintPiece(piece('c-bl'), cornerSprite, 'no-repeat', cornerSize, cornerH);
+
+    place(piece('c-br'), width + band - cornerSize, height + band - cornerH, cornerSize, cornerH, 'scale(-1,-1)');
+    paintPiece(piece('c-br'), cornerSprite, 'no-repeat', cornerSize, cornerH);
+
+    var crestPiece = piece('crest');
+    if (crestSprite && height > 240 && width > 320) {
+        var crestH = band * 1.8;
+        var crestW = crestH * (crestSprite.width / crestSprite.height);
+        if (crestW > width * 0.6) {
+            crestW = width * 0.6;
+            crestH = crestW * (crestSprite.height / crestSprite.width);
+        }
+        crestPiece.style.display = 'block';
+        place(crestPiece, (width - crestW) / 2, -band - crestH + 12, crestW, crestH, 'none');
+        paintPiece(crestPiece, crestSprite, 'no-repeat', crestW, crestH);
+    } else {
+        crestPiece.style.display = 'none';
+    }
+}
+
+function layoutFrames() {
+    var cards = document.querySelectorAll('.card');
+    for (var i = 0; i < cards.length; i++) {
+        layoutFrame(cards[i]);
+    }
+}
+
+async function start() {
+    buildPipe();
+    curlSprite = await loadSprite('sprites/curl.png');
+    cornerSprite = await loadSprite('sprites/corner.png');
+    crestSprite = await loadSprite('sprites/crest.png');
+    layoutFrames();
+}
+
+window.addEventListener('resize', function () {
+    buildPipe();
+    layoutFrames();
+});
+
+start();
+</script>
+</body>
+</html>
