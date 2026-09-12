@@ -275,36 +275,47 @@ def apply_overrides(scenario: dict, overrides: dict) -> dict:
 def calculate(scenario: dict, overrides: dict | None = None) -> dict:
     if overrides:
         scenario = apply_overrides(scenario, overrides)
-    
+
     validate(scenario)
-    
+
     env = scenario["environment"]
     step_s = env["step_s"]
     horizon_s = env["horizon_s"]
-    
+    min_elev = env["min_elevation_deg"]
+
     clients = [g["id"] for g in scenario["ground_sites"] if g["role"] == "client"]
     gateways = {g["id"] for g in scenario["ground_sites"] if g["role"] == "gateway"}
-    
+
     routes = []
     graphs_by_t = {}
+    visibility = {cid: [] for cid in clients}
+
     for t_s in range(0, horizon_s, step_s):
         snap = snapshot(scenario, t_s)
         graph = build_graph(snap["edges"])
         graphs_by_t[t_s] = graph
+
+        # --- видимость хотя бы одного активного спутника ---
+        elevation = snap.get("elevation_deg", {})
+        for client in clients:
+            elevs = elevation.get(client, {})
+            visible = any(e >= min_elev for e in elevs.values())
+            visibility[client].append(visible)
+
+        # --- маршруты ---
         for client in clients:
             path = bfs(client, gateways, graph)
             routes.append({"t_s": t_s, "client_id": client, "path": path})
-    
+
     metrics = calc_metrics_with_reasons(
-        routes, clients, step_s, scenario, graphs_by_t
+        routes, clients, step_s, scenario, graphs_by_t, visibility
     )
-    
+
     return {
         "metrics": metrics,
         "target_availability": env["target_availability"],
         "routes_count": len(routes),
     }
-
 
 # ============================================================
 # 7. ВЫГРУЗКА РЕЗУЛЬТАТА (формат ТЗ)
