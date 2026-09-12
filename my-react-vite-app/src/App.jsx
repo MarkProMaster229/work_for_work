@@ -15,6 +15,7 @@ import ReasonsPanel from "./components/ReasonsPanel";
 import VariantsPanel from "./components/VariantsPanel";
 import LaunchStageSelector from "./components/LaunchStageSelector";
 import PlaneEditor from "./components/PlaneEditor";
+import ConstellationPanel from "./components/ConstellationPanel";
 
 import { useFrames } from "./hooks/useFrames";
 import { usePipeJoints } from "./hooks/usePipeJoints";
@@ -94,9 +95,12 @@ export default function App() {
   const [kpi, setKpi] = useState(EMPTY_KPI);
   const [perClientMetrics, setPerClientMetrics] = useState(null);
   const [scenarioName, setScenarioName] = useState("");
+  const [scenario, setScenario] = useState(null);
+  const [initialPlanes, setInitialPlanes] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportingResult, setExportingResult] = useState(false);
+  const [resetting, setResetting] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [mapReady, setMapReady] = useState(false);
   const [snapshot, setSnapshot] = useState(null);
@@ -104,9 +108,6 @@ export default function App() {
   const [overrides, setOverrides] = useState(EMPTY_OVERRIDES);
   const [error, setError] = useState(null);
   const [sliderConfig, setSliderConfig] = useState({ max: 86400, step: 120 });
-
-  // Плоскости исходного сценария — сюда попадают из /api/scenario/export и файла
-  const [initialPlanes, setInitialPlanes] = useState([]);
 
   const [selectedClient, setSelectedClient] = useState(null);
 
@@ -126,7 +127,7 @@ export default function App() {
     [groundSites],
   );
 
-  // ---- станции ----
+  // --- станции ---
   const refreshGroundSites = useCallback(async () => {
     try {
       const data = await api.getGroundSites();
@@ -140,7 +141,7 @@ export default function App() {
     refreshGroundSites();
   }, [refreshGroundSites]);
 
-  // ---- варианты ----
+  // --- варианты ---
   const refreshVariants = useCallback(async () => {
     try {
       const data = await api.listVariants();
@@ -154,25 +155,27 @@ export default function App() {
     refreshVariants();
   }, [refreshVariants]);
 
-  // ---- авто-подхват сценария: горизонт + плоскости ----
+  // --- авто-подхват сценария ---
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const scenario = await api.exportScenario({});
+        const data = await api.exportScenario({});
         if (cancelled) return;
-        const env = scenario?.environment || {};
+        const s = data?.effective_scenario || data;
+        setScenario(s);
+        const env = s?.environment || {};
         if (env.horizon_s) {
           setSliderConfig({
             max: env.horizon_s,
             step: env.step_s ?? 120,
           });
         }
-        if (scenario?.design?.planes?.length) {
-          setInitialPlanes(scenario.design.planes);
+        if (s?.design?.planes?.length) {
+          setInitialPlanes(s.design.planes);
         }
-        if (!scenarioName && (scenario?.meta?.title || scenario?.meta?.id)) {
-          setScenarioName(scenario.meta.title || scenario.meta.id);
+        if (!scenarioName && (s?.meta?.title || s?.meta?.id)) {
+          setScenarioName(s.meta.title || s.meta.id);
         }
       } catch (err) {
         console.warn("Не удалось получить сценарий:", err);
@@ -184,7 +187,7 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ---- снапшот ----
+  // --- снапшот ---
   const fetchSnapshot = useCallback(async (t_s, ovr) => {
     const clean = cleanOverrides(ovr);
     const data = hasAnyOverride(ovr)
@@ -213,7 +216,6 @@ export default function App() {
     };
   }, [currentTime, mapReady, overrides, fetchSnapshot]);
 
-  // ---- GeoJSON ----
   const geojson = useMemo(() => {
     if (!snapshot) return { type: "FeatureCollection", features: [] };
     return transformBackendToGeoJSON(snapshot, groundSites);
@@ -224,7 +226,9 @@ export default function App() {
     return buildRouteGeoJSON(snapshot, groundSites, selectedClient);
   }, [snapshot, groundSites, selectedClient]);
 
-  // ---- метрики ----
+  const routes = snapshot?.routes || {};
+  const servingSatellites = snapshot?.serving_satellites || {};
+
   const applyMetrics = useCallback((calcResult) => {
     const summary = summarizeMetrics(calcResult);
     setPerClientMetrics(summary.perClient);
@@ -258,7 +262,6 @@ export default function App() {
     [applyMetrics, fetchSnapshot, currentTime],
   );
 
-  // ---- клик по узлу ----
   const handleNodeOverride = useCallback(
     async ({ id, kind, start_s, end_s }) => {
       if (kind !== "satellite" && kind !== "gateway") return;
@@ -294,7 +297,6 @@ export default function App() {
     [overrides, recalcAll],
   );
 
-  // ---- смена launch_stage ----
   const handleLaunchStage = useCallback(
     async (stage) => {
       const next = { ...overrides, launch_stage: stage };
@@ -309,7 +311,6 @@ export default function App() {
     [overrides, recalcAll],
   );
 
-  // ---- редактирование плоскостей ----
   const handlePlanesApply = useCallback(
     async (planes) => {
       const next = { ...overrides, planes };
@@ -334,7 +335,6 @@ export default function App() {
     }
   }, [overrides, recalcAll]);
 
-  // ---- очистка ----
   const handleClearOverrides = useCallback(async () => {
     setOverrides(EMPTY_OVERRIDES);
     try {
@@ -353,22 +353,42 @@ export default function App() {
     }
   }, [overrides, recalcAll]);
 
-  // ---- загрузка сценария ----
+  // --- полный сброс ---
+  const handleResetAll = useCallback(async () => {
+    setResetting(true);
+    try {
+      setOverrides(EMPTY_OVERRIDES);
+      setSelectedClient(null);
+      setCompareResult(null);
+      setCurrentTime(0);
+      await recalcAll(EMPTY_OVERRIDES);
+    } catch (err) {
+      console.error("reset all failed:", err);
+      setError("Не удалось сбросить: " + err.message);
+    } finally {
+      setResetting(false);
+    }
+  }, [recalcAll]);
+
+  // --- загрузка сценария ---
   const handleScenarioFile = useCallback(
     async (file) => {
       try {
         const text = await file.text();
-        const scenario = JSON.parse(text);
-        const info = await api.loadScenario(scenario);
+        const scenarioJson = JSON.parse(text);
+        const info = await api.loadScenario(scenarioJson);
         console.log("Сценарий принят бэкендом:", info);
 
-        setScenarioName(scenario.meta?.title || scenario.meta?.id || file.name);
+        setScenario(scenarioJson);
+        setScenarioName(
+          scenarioJson.meta?.title || scenarioJson.meta?.id || file.name,
+        );
         setSliderConfig({
-          max: scenario.environment?.horizon_s ?? 86400,
-          step: scenario.environment?.step_s ?? 120,
+          max: scenarioJson.environment?.horizon_s ?? 86400,
+          step: scenarioJson.environment?.step_s ?? 120,
         });
-        if (scenario.design?.planes?.length) {
-          setInitialPlanes(scenario.design.planes);
+        if (scenarioJson.design?.planes?.length) {
+          setInitialPlanes(scenarioJson.design.planes);
         }
         setOverrides(EMPTY_OVERRIDES);
         setPerClientMetrics(null);
@@ -391,7 +411,6 @@ export default function App() {
     [refreshGroundSites, applyMetrics],
   );
 
-  // ---- выгрузка сценария ----
   const handleExport = useCallback(async () => {
     setExporting(true);
     try {
@@ -418,7 +437,6 @@ export default function App() {
     }
   }, [overrides]);
 
-  // ---- выгрузка результата ----
   const handleExportResult = useCallback(async () => {
     setExportingResult(true);
     try {
@@ -445,7 +463,6 @@ export default function App() {
     }
   }, [overrides]);
 
-  // ---- варианты ----
   const handleSaveVariant = useCallback(
     async (name, ovr, description) => {
       setVariantsBusy(true);
@@ -523,7 +540,11 @@ export default function App() {
           exporting={exporting}
           onExportResult={handleExportResult}
           exportingResult={exportingResult}
+          onResetAll={handleResetAll}
+          resetting={resetting}
         />
+
+        <ConstellationPanel scenario={scenario} />
 
         <LaunchStageSelector
           value={overrides.launch_stage}
@@ -552,6 +573,8 @@ export default function App() {
             onSelectClient={setSelectedClient}
             selectedClient={selectedClient}
             maxDuration={sliderConfig.max}
+            routes={routes}
+            servingSatellites={servingSatellites}
           />
 
           <OverridesPanel

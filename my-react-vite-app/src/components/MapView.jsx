@@ -22,6 +22,8 @@ export default function MapView({
   onSelectClient,
   selectedClient,
   maxDuration = 86400,
+  routes = {},
+  servingSatellites = {},
 }) {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
@@ -29,12 +31,16 @@ export default function MapView({
   const onNodeOverrideRef = useRef(onNodeOverride);
   const onSelectClientRef = useRef(onSelectClient);
   const maxDurationRef = useRef(maxDuration);
+  const routesRef = useRef(routes);
+  const servingRef = useRef(servingSatellites);
   const activePopupRef = useRef(null);
 
   useEffect(() => { currentTimeRef.current = currentTime; }, [currentTime]);
   useEffect(() => { onNodeOverrideRef.current = onNodeOverride; }, [onNodeOverride]);
   useEffect(() => { onSelectClientRef.current = onSelectClient; }, [onSelectClient]);
   useEffect(() => { maxDurationRef.current = maxDuration; }, [maxDuration]);
+  useEffect(() => { routesRef.current = routes; }, [routes]);
+  useEffect(() => { servingRef.current = servingSatellites; }, [servingSatellites]);
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
@@ -58,7 +64,6 @@ export default function MapView({
         data: { type: "FeatureCollection", features: [] },
       });
 
-      // обычные рёбра
       map.addLayer({
         id: "graph-edges",
         type: "line",
@@ -71,7 +76,6 @@ export default function MapView({
         },
       });
 
-      // маршрут — поверх рёбер
       map.addLayer({
         id: "route-line",
         type: "line",
@@ -83,7 +87,6 @@ export default function MapView({
         },
       });
 
-      // узлы
       map.addLayer({
         id: "graph-nodes",
         type: "circle",
@@ -140,7 +143,6 @@ export default function MapView({
             feature.properties.active === "true",
         };
 
-        // клик по клиенту — выделяем его маршрут
         if (node.node_type === "ground_site" && node.role === "client") {
           onSelectClientRef.current?.(node.node_id);
         }
@@ -152,7 +154,7 @@ export default function MapView({
         }
 
         const container = document.createElement("div");
-        const popup = new maplibregl.Popup({ offset: 12, maxWidth: "320px" })
+        const popup = new maplibregl.Popup({ offset: 12, maxWidth: "340px" })
           .setLngLat(coordinates)
           .setDOMContent(container)
           .addTo(map);
@@ -175,6 +177,8 @@ export default function MapView({
             onSelectClient={onSelectClientRef.current}
             colors={COLORS}
             maxDuration={maxDurationRef.current}
+            routes={routesRef.current}
+            servingSatellites={servingRef.current}
           />
         );
 
@@ -220,14 +224,9 @@ export default function MapView({
     if (!mapRef.current) return;
     const src = mapRef.current.getSource("route-source");
     if (src) {
-      src.setData(
-        routeGeojson || { type: "FeatureCollection", features: [] },
-      );
+      src.setData(routeGeojson || { type: "FeatureCollection", features: [] });
     }
   }, [routeGeojson]);
-
-  // смена selectedClient — перерисовать цвет ребра маршрута? сейчас не нужно,
-  // но подсветим клиента в отдельном слое позже при желании.
 
   return (
     <div

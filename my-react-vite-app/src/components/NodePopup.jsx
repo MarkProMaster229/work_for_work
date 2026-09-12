@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 
 const DEFAULT_COLORS = {
   client: "#3b82f6",
@@ -33,6 +33,8 @@ export default function NodePopup({
   onSelectClient,
   colors = DEFAULT_COLORS,
   maxDuration = 86400,
+  routes = {},
+  servingSatellites = {},
 }) {
   const MAX_DURATION_S = Math.max(MIN_DURATION_S, maxDuration);
 
@@ -44,6 +46,23 @@ export default function NodePopup({
 
   const [duration, setDuration] = useState(Math.min(3600, MAX_DURATION_S));
   const [pending, setPending] = useState(false);
+
+  // --- для спутника: в чьих маршрутах он участвует ---
+  const inRoutesFor = useMemo(() => {
+    if (!isSatellite) return [];
+    const out = [];
+    for (const [cid, path] of Object.entries(routes || {})) {
+      if (Array.isArray(path) && path.includes(node.node_id)) out.push(cid);
+    }
+    return out;
+  }, [isSatellite, routes, node.node_id]);
+
+  // --- для клиента: какие спутники его обслуживают сейчас ---
+  const servingFor = useMemo(() => {
+    if (!isClient) return [];
+    const list = servingSatellites?.[node.node_id];
+    return Array.isArray(list) ? list : [];
+  }, [isClient, servingSatellites, node.node_id]);
 
   const handleApply = async () => {
     if (!canDisable) return;
@@ -79,7 +98,7 @@ export default function NodePopup({
   ].filter((p) => p.value <= MAX_DURATION_S);
 
   return (
-    <div style={{ fontFamily: "sans-serif", padding: 4, minWidth: 260 }}>
+    <div style={{ fontFamily: "sans-serif", padding: 4, minWidth: 280 }}>
       <strong style={{ fontSize: 14, color: accent }}>{node.name}</strong>
       <hr style={{ margin: "6px 0", border: 0, borderTop: "1px solid #eee" }} />
 
@@ -92,6 +111,7 @@ export default function NodePopup({
       <p style={{ margin: "0 0 3px 0", fontSize: 12, color: "#666" }}>
         <b>Координаты:</b> {node.lat.toFixed(4)}, {node.lon.toFixed(4)}
       </p>
+
       {isSatellite && (
         <p
           style={{
@@ -102,6 +122,40 @@ export default function NodePopup({
         >
           <b>Статус:</b> {node.active ? "активен" : "неактивен"}
         </p>
+      )}
+
+      {/* --- Обслуживающие спутники для клиента --- */}
+      {isClient && (
+        <div
+          style={{
+            marginTop: 6,
+            padding: "6px 8px",
+            background: "#eff6ff",
+            borderRadius: 4,
+            fontSize: 12,
+            color: "#1e40af",
+          }}
+        >
+          <b>Обслуживают сейчас:</b>{" "}
+          {servingFor.length ? servingFor.join(", ") : "нет видимых спутников"}
+        </div>
+      )}
+
+      {/* --- Участие в маршрутах для спутника --- */}
+      {isSatellite && (
+        <div
+          style={{
+            marginTop: 6,
+            padding: "6px 8px",
+            background: inRoutesFor.length ? "#fef3c7" : "#f3f4f6",
+            borderRadius: 4,
+            fontSize: 12,
+            color: inRoutesFor.length ? "#92400e" : "#6b7280",
+          }}
+        >
+          <b>Входит в маршрут:</b>{" "}
+          {inRoutesFor.length ? inRoutesFor.join(", ") : "—"}
+        </div>
       )}
 
       {isClient && (
