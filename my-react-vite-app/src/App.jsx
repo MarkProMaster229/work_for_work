@@ -1,66 +1,18 @@
-import React, { useState, useEffect, useRef } from 'react';
-import * as maplibregl from 'maplibre-gl';
-import 'maplibre-gl/dist/maplibre-gl.css';
+import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import './jabajaba.css';
 import { api } from './api.jsx';
 
-function transformBackendToGeoJSON(data, groundSites = []) {
-  const features = [];
-  const coordsMap = {};
+import KpiPanel from './components/KpiPanel';
+import ControlPanel from './components/ControlPanel';
+import MapView from './components/MapView';
+import FrameDecoration from './components/FrameDecoration';
+import PipeDecoration from './components/PipeDecoration';
+import LoadingOverlay from './components/LoadingOverlay';
+import ErrorBanner from './components/ErrorBanner';
 
-  if (data.satellites) {
-    for (const sat of data.satellites) {
-      coordsMap[sat.id] = [sat.lon, sat.lat];
-      features.push({
-        type: 'Feature',
-        geometry: { type: 'Point', coordinates: [sat.lon, sat.lat] },
-        properties: {
-          node_type: 'satellite',
-          node_id: sat.id,
-          name: sat.id,
-          active: sat.active,
-        },
-      });
-    }
-  }
-
-  if (groundSites) {
-    for (const site of groundSites) {
-      coordsMap[site.id] = [site.lon, site.lat];
-      features.push({
-        type: 'Feature',
-        geometry: { type: 'Point', coordinates: [site.lon, site.lat] },
-        properties: {
-          node_type: 'ground_site',
-          node_id: site.id,
-          name: site.name || site.id,
-          role: site.role,
-        },
-      });
-    }
-  }
-
-  if (data.edges) {
-    for (const edge of data.edges) {
-      const [a, b, dist] = edge;
-      if (coordsMap[a] && coordsMap[b]) {
-        features.push({
-          type: 'Feature',
-          geometry: {
-            type: 'LineString',
-            coordinates: [coordsMap[a], coordsMap[b]],
-          },
-          properties: {
-            edge_type: 'link',
-            distance: dist,
-          },
-        });
-      }
-    }
-  }
-
-  return { type: 'FeatureCollection', features };
-}
+import { useFrames } from './hooks/useFrames';
+import { usePipeJoints } from './hooks/usePipeJoints';
+import { transformBackendToGeoJSON } from './utils/geojson';
 
 export default function App() {
   const [kpi, setKpi] = useState({
@@ -70,380 +22,110 @@ export default function App() {
     activeKA: 0,
   });
 
+  const [scenarioName, setScenarioName] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [pipeJoints, setPipeJoints] = useState([]);
-  const [isPipeJerked, setIsPipeJerked] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
-  const [loading, setLoading] = useState(true);
+  const [mapReady, setMapReady] = useState(false);
   const [snapshot, setSnapshot] = useState(null);
+  const [groundSites, setGroundSites] = useState([]);
   const [error, setError] = useState(null);
+  const [sliderConfig, setSliderConfig] = useState({ max: 3600, step: 10 });
 
-  const mapContainerRef = useRef(null);
-  const mapRef = useRef(null);
   const creamCardRef = useRef(null);
   const mainCardRef = useRef(null);
-  const fileInputRef = useRef(null);
-  const groundSitesRef = useRef([]);
-  const spritesRef = useRef({ curl: null, corner: null, crest: null });
 
-  // --- Карта ---
-  useEffect(() => {
-    if (!mapContainerRef.current) return;
-    if (mapRef.current) return; // защита от двойного создания (StrictMode / hot reload)
+  const { joints, jerked, jerk, clearJerk } = usePipeJoints();
+  const { updateAll } = useFrames([creamCardRef, mainCardRef]);
 
-    const map = new maplibregl.Map({
-      style: 'https://tiles.openfreemap.org/styles/liberty',
-      center: [37.6173, 55.7558],
-      zoom: 3,
-      container: mapContainerRef.current,
-    });
-
-    mapRef.current = map;
-
-    map.on('load', () => {
-      map.addSource('graph-source', {
-        type: 'geojson',
-        data: { type: 'FeatureCollection', features: [] },
-      });
-
-      map.addLayer({
-        id: 'graph-edges',
-        type: 'line',
-        source: 'graph-source',
-        filter: ['==', ['geometry-type'], 'LineString'],
-        paint: {
-          'line-color': '#3b82f6',
-          'line-width': 3,
-          'line-opacity': 0.7,
-        },
-      });
-
-      map.addLayer({
-        id: 'graph-nodes',
-        type: 'circle',
-        source: 'graph-source',
-        filter: ['==', ['geometry-type'], 'Point'],
-        paint: {
-          'circle-radius': [
-            'match',
-            ['get', 'node_type'],
-            'ground_site', 8,
-            'satellite', 6,
-            6,
-          ],
-          'circle-color': [
-            'match',
-            ['get', 'node_type'],
-            'ground_site', '#10b981',
-            'satellite', '#ef4444',
-            '#ef4444',
-          ],
-          'circle-stroke-width': 2,
-          'circle-stroke-color': '#ffffff',
-        },
-      });
-
-      map.on('click', 'graph-nodes', (e) => {
-        const feature = e.features[0];
-        const coordinates = feature.geometry.coordinates.slice();
-        const props = feature.properties;
-
-        const popupContent = `
-          <div style="font-family: sans-serif; padding: 5px; min-width: 150px;">
-            <strong style="font-size: 14px; color: ${props.node_type === 'satellite' ? '#ef4444' : '#10b981'};">
-              ${props.name}
-            </strong>
-            <hr style="margin: 5px 0; border: 0; border-top: 1px solid #eee;">
-            <p style="margin: 0 0 3px 0;"><b>ID:</b> ${props.node_id}</p>
-            <p style="margin: 0; color: #666; font-size: 11px;">
-              <b>Координаты:</b> ${coordinates[1].toFixed(4)}, ${coordinates[0].toFixed(4)}
-            </p>
-          </div>
-        `;
-
-        new maplibregl.Popup({ offset: 10 })
-          .setLngLat(coordinates)
-          .setHTML(popupContent)
-          .addTo(map);
-      });
-
-      map.on('mouseenter', 'graph-nodes', () => { map.getCanvas().style.cursor = 'pointer'; });
-      map.on('mouseleave', 'graph-nodes', () => { map.getCanvas().style.cursor = ''; });
-
-      setLoading(false);
-    });
-
-    map.on('error', (e) => {
-      console.error('MapLibre error:', e?.error || e);
-    });
-
-    return () => {
-      if (mapRef.current) {
-        mapRef.current.remove();
-        mapRef.current = null;
-      }
-    };
+  // --- Загрузка станций при старте ---
+  const refreshGroundSites = useCallback(async () => {
+    try {
+      const data = await api.getGroundSites();
+      setGroundSites([...(data.clients || []), ...(data.gateways || [])]);
+    } catch (err) {
+      console.error('getGroundSites failed:', err);
+    }
   }, []);
 
-  // --- Наземные станции ---
-  useEffect(() => {
-    api.getGroundSites()
-      .then((data) => {
-        groundSitesRef.current = [...(data.clients || []), ...(data.gateways || [])];
-      })
-      .catch((err) => {
-        console.error('getGroundSites failed:', err);
-      });
-  }, []);
+  useEffect(() => { refreshGroundSites(); }, [refreshGroundSites]);
 
   // --- Снапшот при изменении времени ---
   useEffect(() => {
-    if (loading || !mapRef.current) return;
+    if (!mapReady) return;
+    let cancelled = false;
 
     api.getSnapshot(currentTime)
-      .then((data) => {
-        setSnapshot(data);
-        const geojson = transformBackendToGeoJSON(data, groundSitesRef.current);
-        const source = mapRef.current.getSource('graph-source');
-        if (source) {
-          source.setData(geojson);
-        }
-      })
-      .catch((err) => {
-        console.error('Ошибка при обновлении карты:', err);
-      });
-  }, [currentTime, loading]);
+      .then((data) => { if (!cancelled) setSnapshot(data); })
+      .catch((err) => { if (!cancelled) console.error('getSnapshot failed:', err); });
 
-  // --- Спрайты + resize ---
-  useEffect(() => {
-    buildPipe();
-    window.addEventListener('resize', handleResize);
+    return () => { cancelled = true; };
+  }, [currentTime, mapReady]);
 
-    const loadSprite = (path) => {
-      return new Promise((resolve, reject) => {
-        const image = new Image();
-        image.onload = () => resolve({ url: path, width: image.naturalWidth, height: image.naturalHeight });
-        image.onerror = () => reject(new Error('Не удалось загрузить файл ' + path));
-        image.src = path;
-      });
-    };
+  // --- GeoJSON ---
+  const geojson = useMemo(() => {
+    if (!snapshot) return { type: 'FeatureCollection', features: [] };
+    return transformBackendToGeoJSON(snapshot, groundSites);
+  }, [snapshot, groundSites]);
 
-    Promise.all([
-      loadSprite('sprites/curl.png').catch(() => null),
-      loadSprite('sprites/corner.png').catch(() => null),
-      loadSprite('sprites/crest.png').catch(() => null),
-    ]).then(([curl, corner, crest]) => {
-      spritesRef.current = { curl, corner, crest };
-      updateAllFrames();
+  // --- Загрузка сценария (ИСПРАВЛЕНО) ---
+const handleScenarioFile = useCallback(async (file) => {
+  try {
+    const text = await file.text();
+    const scenario = JSON.parse(text);
+
+    // 1. Отправить сценарий на бэкенд
+    const info = await api.loadScenario(scenario);
+    console.log('Сценарий принят бэкендом:', info);
+
+    // 2. Обновить заголовок и слайдер
+    setScenarioName(scenario.name || file.name);
+    setSliderConfig({
+      max: scenario.environment?.horizon_s ?? 3600,
+      step: scenario.environment?.step_s ?? 10,
     });
 
-    return () => {
-      window.removeEventListener('resize', handleResize);
-    };
-  }, []);
+    // 3. Сбросить время, перезапросить станции и снапшот
+    setCurrentTime(0);
+    await refreshGroundSites();
 
-  const handleResize = () => {
-    buildPipe();
-    updateAllFrames();
-  };
+    const freshSnap = await api.getSnapshot(0);
+    setSnapshot(freshSnap);
 
-  const updateAllFrames = () => {
-    if (creamCardRef.current) layoutFrame(creamCardRef.current);
-    if (mainCardRef.current) layoutFrame(mainCardRef.current);
-  };
+    // 4. Обновить KPI
+    const metrics = await api.calculate();
+    console.log('Метрики:', metrics);
+    setKpi({
+      minAvailability: metrics.min_availability_pct != null
+        ? `${metrics.min_availability_pct.toFixed(1)}%` : '—',
+      avgAvailability: metrics.avg_availability_pct != null
+        ? `${metrics.avg_availability_pct.toFixed(1)}%` : '—',
+      maxBreak: metrics.max_break_s != null
+        ? `${metrics.max_break_s} с` : '—',
+      activeKA: metrics.active_satellites ?? 0,
+    });
 
-  const buildPipe = () => {
-    const height = window.innerHeight;
-    let spots = [0.18, 0.51, 0.86];
-    if (Math.random() < 0.35) {
-      spots = [0.28, 0.74];
-    }
-    const joints = spots.map((spot) => Math.round(height * spot));
-    setPipeJoints(joints);
-  };
-
-  const handlePipeClick = () => {
-    setIsPipeJerked(false);
-    setTimeout(() => setIsPipeJerked(true), 0);
-  };
-
-  // --- Загрузка сценария ---
-  const handleScenarioUpload = (event) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const scenario = JSON.parse(e.target.result);
-        console.log('Сценарий загружен:', scenario);
-        setError(null);
-        // TODO: api.uploadScenario(scenario).then(...)
-      } catch (err) {
-        setError('Не удалось прочитать JSON: ' + err.message);
-      }
-    };
-    reader.onerror = () => setError('Ошибка чтения файла');
-    reader.readAsText(file);
-
-    event.target.value = '';
-  };
-
-  const paintPiece = (style, sprite, repeat, width, height) => {
-    style.maskImage = `url(${sprite.url})`;
-    style.webkitMaskImage = `url(${sprite.url})`;
-    style.maskRepeat = repeat;
-    style.webkitMaskRepeat = repeat;
-    style.maskSize = `${width}px ${height}px`;
-    style.webkitMaskSize = `${width}px ${height}px`;
-  };
-
-  const layoutFrame = (card) => {
-    const { curl, corner, crest } = spritesRef.current;
-    if (!curl || !corner) return;
-
-    const width = card.clientWidth;
-    const height = card.clientHeight;
-    if (!width || !height || width < 90 || height < 90) return;
-
-    const frame = card.querySelector('.nz');
-    if (!frame) return;
-
-    const piece = (name) => frame.querySelector(`[data-k="${name}"]`);
-    const place = (el, left, top, w, h, transform) => {
-      if (!el) return;
-      el.style.left = `${left}px`;
-      el.style.top = `${top}px`;
-      el.style.width = `${w}px`;
-      el.style.height = `${h}px`;
-      el.style.transform = transform;
-    };
-
-    const band = Math.min(30, height * 0.22);
-    let cornerSize = Math.min(88, width * 0.34);
-    let cornerH = cornerSize * (corner.height / corner.width);
-
-    if (cornerH > height * 0.34) {
-      cornerH = height * 0.34;
-      cornerSize = cornerH * (corner.width / corner.height);
-    }
-    const overlap = Math.min(cornerSize * 0.35, 26);
-    const tileBase = band * (curl.width / curl.height);
-
-    const lineH = Math.max(tileBase, width - 2 * (cornerSize - band) + 2 * overlap);
-    const countH = Math.max(1, Math.round(lineH / tileBase));
-    const tileH = lineH / countH;
-
-    const lineV = Math.max(tileBase, height - 2 * (cornerH - band) + 2 * overlap);
-    const countV = Math.max(1, Math.round(lineV / tileBase));
-    const tileV = lineV / countV;
-
-    const et = piece('e-t');
-    place(et, cornerSize - band - overlap, -band, lineH, band, 'none');
-    if (et) { et.style.transformOrigin = 'top left'; paintPiece(et.style, curl, 'repeat-x', tileH, band); }
-
-    const eb = piece('e-b');
-    place(eb, cornerSize - band - overlap, height, lineH, band, 'scaleY(-1)');
-    if (eb) { eb.style.transformOrigin = 'center'; paintPiece(eb.style, curl, 'repeat-x', tileH, band); }
-
-    const el = piece('e-l');
-    place(el, -band, height - (cornerH - band) + overlap, lineV, band, 'rotate(-90deg)');
-    if (el) { el.style.transformOrigin = 'top left'; paintPiece(el.style, curl, 'repeat-x', tileV, band); }
-
-    const er = piece('e-r');
-    place(er, width + band, cornerH - band - overlap, lineV, band, 'rotate(90deg)');
-    if (er) { er.style.transformOrigin = 'top left'; paintPiece(er.style, curl, 'repeat-x', tileV, band); }
-
-    if (piece('c-tl')) { place(piece('c-tl'), -band, -band, cornerSize, cornerH, 'none'); paintPiece(piece('c-tl').style, corner, 'no-repeat', cornerSize, cornerH); }
-    if (piece('c-tr')) { place(piece('c-tr'), width + band - cornerSize, -band, cornerSize, cornerH, 'scaleX(-1)'); paintPiece(piece('c-tr').style, corner, 'no-repeat', cornerSize, cornerH); }
-    if (piece('c-bl')) { place(piece('c-bl'), -band, height + band - cornerH, cornerSize, cornerH, 'scaleY(-1)'); paintPiece(piece('c-bl').style, corner, 'no-repeat', cornerSize, cornerH); }
-    if (piece('c-br')) { place(piece('c-br'), width + band - cornerSize, height + band - cornerH, cornerSize, cornerH, 'scale(-1,-1)'); paintPiece(piece('c-br').style, corner, 'no-repeat', cornerSize, cornerH); }
-
-    const crestPiece = piece('crest');
-    if (crestPiece) {
-      if (crest && height > 240 && width > 320) {
-        let crestH = band * 1.8;
-        let crestW = crestH * (crest.width / crest.height);
-        if (crestW > width * 0.6) {
-          crestW = width * 0.6;
-          crestH = crestW * (crest.height / crest.width);
-        }
-        crestPiece.style.display = 'block';
-        place(crestPiece, (width - crestW) / 2, -crestH / 2, crestW, crestH, 'none');
-        paintPiece(crestPiece.style, crest, 'no-repeat', crestW, crestH);
-      } else {
-        crestPiece.style.display = 'none';
-      }
-    }
-  };
-
-  const FrameDecoration = () => (
-    <div className="nz">
-      {['c-tl', 'c-tr', 'c-bl', 'c-br', 'e-t', 'e-b', 'e-l', 'e-r', 'crest'].map((name) => (
-        <i key={name} data-k={name}></i>
-      ))}
-    </div>
-  );
+    setError(null);
+  } catch (err) {
+    console.error('handleScenarioFile:', err);
+    setError('Не удалось загрузить сценарий: ' + err.message);
+  }
+}, [refreshGroundSites]);
 
   return (
     <div className="app">
       <div className="layout">
+        <KpiPanel kpi={kpi} ref={creamCardRef} />
 
-        <section className="card nal-cream" ref={creamCardRef}>
-          <div className="kpi-grid">
-            <div className="kpi-cell">
-              <div className="k-l">Доступность · мин. по пунктам</div>
-              <div className="k-v">{kpi.minAvailability}</div>
-            </div>
-            <div className="kpi-cell">
-              <div className="k-l">Доступность · средняя</div>
-              <div className="k-v">{kpi.avgAvailability}</div>
-            </div>
-            <div className="kpi-cell">
-              <div className="k-l">Макс. перерыв связи</div>
-              <div className="k-v">{kpi.maxBreak}</div>
-            </div>
-            <div className="kpi-cell">
-              <div className="k-l">Активные КА сейчас</div>
-              <div className="k-v">{kpi.activeKA}</div>
-            </div>
-          </div>
-          <FrameDecoration />
-        </section>
-
-        <section className="card main-panel" ref={mainCardRef}>
-          <div>
-            <div className="mp-sign" id="sign">Название</div>
-            <div className="mp-btns">
-              <input
-                type="file"
-                ref={fileInputRef}
-                style={{ display: 'none' }}
-                accept=".json"
-                onChange={handleScenarioUpload}
-              />
-
-              <button
-                className="btn"
-                onClick={() => fileInputRef.current?.click()}
-              >
-                ⬆ Загрузить сценарий
-              </button>
-
-              <button className="btn">⬇ Выгрузить</button>
-              <button className="btn" onClick={() => setIsLoading(!isLoading)}>
-                {isLoading ? '⏸ Хватит загружаться' : '▶ Тест загрузки'}
-              </button>
-            </div>
-          </div>
-          <FrameDecoration />
-        </section>
+        <ControlPanel
+          ref={mainCardRef}
+          scenarioName={scenarioName}
+          onScenarioFile={handleScenarioFile}
+          isLoading={isLoading}
+          onToggleLoading={() => setIsLoading(!isLoading)}
+        />
 
         <section className="card map-panel" style={{ position: 'relative', minHeight: '450px', flexGrow: 1 }}>
-          <div
-            ref={mapContainerRef}
-            style={{ width: '100%', height: '500px', borderRadius: '4px', overflow: 'hidden' }}
-          />
+          <MapView geojson={geojson} onLoaded={() => setMapReady(true)} />
 
           <div className="map-time-control" style={{
             position: 'absolute',
@@ -465,13 +147,13 @@ export default function App() {
             <input
               type="range"
               min="0"
-              max="3600"
-              step="10"
+              max={sliderConfig.max}
+              step={sliderConfig.step}
               value={currentTime}
               onChange={(e) => setCurrentTime(parseFloat(e.target.value))}
               style={{ width: '180px', display: 'block', cursor: 'pointer' }}
             />
-            {loading && (
+            {!mapReady && (
               <span style={{ fontSize: '10px', color: '#f59e0b', display: 'block', marginTop: '4px' }}>
                 Синхронизация потока...
               </span>
@@ -480,51 +162,18 @@ export default function App() {
 
           <FrameDecoration />
         </section>
-
       </div>
 
-      {error && (
-        <div style={{
-          position: 'fixed',
-          top: '16px',
-          right: '16px',
-          background: '#fee2e2',
-          color: '#991b1b',
-          padding: '10px 14px',
-          borderRadius: '6px',
-          boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-          zIndex: 1000,
-          fontSize: '13px',
-        }}>
-          {error}
-          <button
-            onClick={() => setError(null)}
-            style={{ marginLeft: '12px', background: 'transparent', border: 0, cursor: 'pointer', color: '#991b1b', fontWeight: 'bold' }}
-          >
-            ✕
-          </button>
-        </div>
-      )}
+      <ErrorBanner message={error} onClose={() => setError(null)} />
 
-      <div
-        id="pipe"
-        title="Газовая труба · можно дёрнуть"
-        className={isPipeJerked ? 'jerk' : ''}
-        onClick={handlePipeClick}
-        onAnimationEnd={() => setIsPipeJerked(false)}
-      >
-        <div className="pipe-body"></div>
-        {pipeJoints.map((top, idx) => (
-          <i key={idx} className="pipe-joint" style={{ top: `${top}px` }}></i>
-        ))}
-      </div>
+      <PipeDecoration
+        joints={joints}
+        jerked={jerked}
+        onClick={jerk}
+        onAnimationEnd={clearJerk}
+      />
 
-      <div id="loadOvl" className={isLoading ? 'show' : ''} onClick={() => setIsLoading(false)}>
-        <div className="frame">
-          <img id="loadImg" src="sprites/loading.gif" alt="Загрузка" />
-        </div>
-        <div className="lt">ЗАГРУЗКА ДАННЫХ…</div>
-      </div>
+      <LoadingOverlay visible={isLoading} onClose={() => setIsLoading(false)} />
     </div>
   );
 }
