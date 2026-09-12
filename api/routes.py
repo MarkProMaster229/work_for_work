@@ -102,20 +102,46 @@ def route_satellites():
 
 # ---------- Маршруты в момент t_s ----------
 
-@api_bp.route("/routes", methods=["GET"])
+@api_bp.route("/routes", methods=["GET", "POST"])
 def route_routes():
     scenario = ensure_scenario()
-    t_s = float(request.args.get("t_s", 0))
-    return jsonify(get_routes(scenario, t_s))
+    
+    if request.method == "POST":
+        data = request.get_json(silent=True) or {}
+        t_s = float(data.get("t_s", 0))
+        overrides = data.get("overrides")
+    else:
+        t_s = float(request.args.get("t_s", 0))
+        overrides = None
+    
+    try:
+        result = get_routes(scenario, t_s, overrides)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+    
+    return jsonify(result)
 
 
 # ---------- Полный snapshot (спутники + связи + маршруты) ----------
 
-@api_bp.route("/snapshot", methods=["GET"])
+@api_bp.route("/snapshot", methods=["GET", "POST"])
 def route_snapshot():
     scenario = ensure_scenario()
-    t_s = float(request.args.get("t_s", 0))
-    return jsonify(get_snapshot(scenario, t_s))
+    
+    if request.method == "POST":
+        data = request.get_json(silent=True) or {}
+        t_s = float(data.get("t_s", 0))
+        overrides = data.get("overrides")
+    else:
+        t_s = float(request.args.get("t_s", 0))
+        overrides = None
+    
+    try:
+        result = get_snapshot(scenario, t_s, overrides)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+    
+    return jsonify(result)
 
 
 # ---------- Полный расчёт с overrides ----------

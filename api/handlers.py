@@ -70,10 +70,14 @@ def get_satellites(scenario: dict, t_s: float) -> dict:
 # 3. МАРШРУТЫ В МОМЕНТ t_s
 # ============================================================
 
-def get_routes(scenario: dict, t_s: float) -> dict:
+def get_routes(scenario: dict, t_s: float, overrides: dict | None = None) -> dict:
     """
     Возвращает маршруты от клиентов до шлюзов в момент t_s.
+    Если передан overrides — применяет его.
     """
+    if overrides:
+        scenario = apply_overrides(scenario, overrides)
+    
     snap = snapshot(scenario, t_s)
     graph = build_graph(snap["edges"])
     
@@ -86,20 +90,23 @@ def get_routes(scenario: dict, t_s: float) -> dict:
     
     return {"t_s": t_s, "routes": routes}
 
-
 # ============================================================
 # 4. ПОЛНЫЙ SNAPSHOT (спутники + связи + маршруты)
 # ============================================================
-
-def get_snapshot(scenario: dict, t_s: float) -> dict:
+def get_snapshot(scenario: dict, t_s: float, overrides: dict | None = None) -> dict:
     """
-    Полный snapshot для карты: спутники, связи, маршруты.
+    Полный snapshot для карты: спутники, связи, маршруты, serving_satellites.
+    Если передан overrides — применяет его.
     """
+    if overrides:
+        scenario = apply_overrides(scenario, overrides)
+    
     snap = snapshot(scenario, t_s)
     graph = build_graph(snap["edges"])
     
     clients = [g["id"] for g in scenario["ground_sites"] if g["role"] == "client"]
     gateways = {g["id"] for g in scenario["ground_sites"] if g["role"] == "gateway"}
+    gateways_set = set(gateways)
     
     # Спутники с lat/lon
     satellites = []
@@ -115,16 +122,24 @@ def get_snapshot(scenario: dict, t_s: float) -> dict:
     # Маршруты
     routes = {}
     for client in clients:
-        routes[client] = bfs(client, gateways, graph)
+        routes[client] = bfs(client, gateways_set, graph)
+    
+    # НОВОЕ: serving_satellites — какие спутники обслуживают каждый клиент
+    serving_satellites = {}
+    for client in clients:
+        neighbors = graph.get(client, [])
+        # Оставляем только спутники (начинаются с "S")
+        sat_neighbors = [n for n in neighbors if n.startswith("S")]
+        serving_satellites[client] = sat_neighbors
     
     return {
         "t_s": t_s,
         "satellites": satellites,
         "edges": snap["edges"],
         "routes": routes,
+        "serving_satellites": serving_satellites,
     }
-
-
+    
 # ============================================================
 # 5. ПРИМЕНЕНИЕ OVERRIDES
 # ============================================================
