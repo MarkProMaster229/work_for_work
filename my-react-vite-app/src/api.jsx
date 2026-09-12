@@ -8,96 +8,75 @@ async function handleResponse(response) {
   return response.json();
 }
 
+const jsonPost = (path, body) =>
+  fetch(`${BASE_URL}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body ?? {}),
+  }).then(handleResponse);
+
 export const api = {
-  // ---------- Healthcheck ----------
+  // 1. Healthcheck
   checkHealth: () =>
     fetch(`${BASE_URL}/health`).then(handleResponse),
 
-  // ---------- Загрузка сценария ----------
+  // 2. Загрузка сценария
   loadScenario: (data) =>
-    fetch(`${BASE_URL}/scenario/load`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data),
-    }).then(handleResponse),
+    jsonPost("/scenario/load", data),
 
-  // ---------- Наземные пункты ----------
+  // 3. Экспорт сценария
+  exportScenario: (overrides = null) =>
+    jsonPost("/scenario/export", { overrides }),
+
+  // 4. Наземные пункты
   getGroundSites: () =>
     fetch(`${BASE_URL}/ground_sites`).then(handleResponse),
 
-  // ---------- Спутники ----------
+  // 5. Спутники
   getSatellites: (t_s = 0) =>
     fetch(`${BASE_URL}/satellites?t_s=${t_s}`).then(handleResponse),
 
-  // ---------- Маршруты ----------
-  getRoutes: (t_s = 0, overrides = null) => {
-    if (overrides) {
-      return fetch(`${BASE_URL}/routes`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ t_s, overrides }),
-      }).then(handleResponse);
-    }
-    return fetch(`${BASE_URL}/routes?t_s=${t_s}`).then(handleResponse);
-  },
+  // 6. Маршруты (GET)
+  getRoutes: (t_s = 0) =>
+    fetch(`${BASE_URL}/routes?t_s=${t_s}`).then(handleResponse),
 
-  // ---------- Снапшот ----------
-  getSnapshot: (t_s = 0, overrides = null) => {
-    if (overrides) {
-      return fetch(`${BASE_URL}/snapshot`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ t_s, overrides }),
-      }).then(handleResponse);
-    }
-    return fetch(`${BASE_URL}/snapshot?t_s=${t_s}`).then(handleResponse);
-  },
+  // 7. Маршруты с overrides (POST)
+  getRoutesWithOverrides: (t_s = 0, overrides = {}) =>
+    jsonPost("/routes", { t_s, overrides }),
 
-  // ---------- Расчеты и экспорт результатов ----------
+  // 8. Снапшот (GET)
+  getSnapshot: (t_s = 0) =>
+    fetch(`${BASE_URL}/snapshot?t_s=${t_s}`).then(handleResponse),
+
+  // 9. Снапшот с overrides (POST)
+  getSnapshotWithOverrides: (t_s = 0, overrides = {}) =>
+    jsonPost("/snapshot", { t_s, overrides }),
+
+  // 10. Расчёт метрик
   calculate: (overrides = null) =>
-    fetch(`${BASE_URL}/calculate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ overrides }),
-    }).then(handleResponse),
+    jsonPost("/calculate", { overrides }),
 
+  // 11. Экспорт результата
   exportResult: (overrides = null) =>
-    fetch(`${BASE_URL}/export`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ overrides }),
-    }).then(handleResponse),
+    jsonPost("/export", { overrides }),
 
-  // ---------- Варианты ----------
+  // 12. Сохранить вариант
   saveVariant: (name, overrides = {}, description = "") =>
-    fetch(`${BASE_URL}/variants/save`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, overrides, description }),
-    }).then(handleResponse),
+    jsonPost("/variants/save", { name, overrides, description }),
 
+  // 13. Список вариантов
   listVariants: () =>
     fetch(`${BASE_URL}/variants`).then(handleResponse),
 
+  // 14. Удалить вариант
   deleteVariant: (name) =>
     fetch(`${BASE_URL}/variants/${encodeURIComponent(name)}`, {
       method: "DELETE",
     }).then(handleResponse),
 
+  // 15. Сравнить варианты
   compareVariants: (variantA, variantB) =>
-    fetch(`${BASE_URL}/variants/compare`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ variant_a: variantA, variant_b: variantB }),
-    }).then(handleResponse),
-
-  // ---------- Экспорт сценария ----------
-  exportScenario: (overrides = null) =>
-    fetch(`${BASE_URL}/scenario/export`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ overrides }),
-    }).then(handleResponse),
+    jsonPost("/variants/compare", { variant_a: variantA, variant_b: variantB }),
 };
 
 export default api;

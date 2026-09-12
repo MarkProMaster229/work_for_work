@@ -1,113 +1,210 @@
-import React, { useEffect, useRef } from 'react';
-import * as maplibregl from 'maplibre-gl';
-import 'maplibre-gl/dist/maplibre-gl.css';
+import React, { useEffect, useRef } from "react";
+import * as maplibregl from "maplibre-gl";
+import { createRoot } from "react-dom/client";
+import "maplibre-gl/dist/maplibre-gl.css";
+import NodePopup from "./NodePopup";
 
-export default function MapView({ geojson, onLoaded }) {
+// Палитра — меняй здесь, если захочешь другие цвета.
+const COLORS = {
+  edge:              "#3b82f6", // линии связи
+  client:            "#3b82f6", // ← КЛИЕНТ (синий)
+  gateway:           "#f59e0b", // ← ШЛЮЗ (янтарный)
+  satelliteActive:   "#ef4444", // спутник включён
+  satelliteInactive: "#9ca3af", // спутник выключен
+};
+
+export default function MapView({
+  geojson,
+  onLoaded,
+  currentTime,
+  onNodeOverride,
+}) {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
+  const currentTimeRef = useRef(currentTime);
+  const onNodeOverrideRef = useRef(onNodeOverride);
+  const activePopupRef = useRef(null); // {popup, root}
+
+  useEffect(() => {
+    currentTimeRef.current = currentTime;
+  }, [currentTime]);
+
+  useEffect(() => {
+    onNodeOverrideRef.current = onNodeOverride;
+  }, [onNodeOverride]);
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
 
     const map = new maplibregl.Map({
-      style: 'https://tiles.openfreemap.org/styles/liberty',
+      style: "https://tiles.openfreemap.org/styles/liberty",
       center: [37.6173, 55.7558],
       zoom: 3,
       container: containerRef.current,
     });
-
     mapRef.current = map;
 
-    map.on('load', () => {
-      map.addSource('graph-source', {
-        type: 'geojson',
-        data: { type: 'FeatureCollection', features: [] },
+    map.on("load", () => {
+      map.addSource("graph-source", {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
       });
 
+      // ---------- Рёбра ----------
       map.addLayer({
-        id: 'graph-edges',
-        type: 'line',
-        source: 'graph-source',
-        filter: ['==', ['geometry-type'], 'LineString'],
+        id: "graph-edges",
+        type: "line",
+        source: "graph-source",
+        filter: ["==", ["geometry-type"], "LineString"],
         paint: {
-          'line-color': '#3b82f6',
-          'line-width': 3,
-          'line-opacity': 0.7,
+          "line-color": COLORS.edge,
+          "line-width": 3,
+          "line-opacity": 0.7,
         },
       });
 
+      // ---------- Узлы ----------
+      // Порядок разбора:
+      //   1) satellite  → active ? красный : серый
+      //   2) ground_site → role==gateway ? янтарный : синий
       map.addLayer({
-        id: 'graph-nodes',
-        type: 'circle',
-        source: 'graph-source',
-        filter: ['==', ['geometry-type'], 'Point'],
+        id: "graph-nodes",
+        type: "circle",
+        source: "graph-source",
+        filter: ["==", ["geometry-type"], "Point"],
         paint: {
-          'circle-radius': [
-            'match', ['get', 'node_type'],
-            'ground_site', 8,
-            'satellite', 6,
-            6,
+          "circle-radius": [
+            "case",
+            // наземные станции
+            ["==", ["get", "node_type"], "ground_site"],
+            ["case", ["==", ["get", "role"], "gateway"], 9, 7],
+            // спутники
+            ["==", ["get", "active"], true], 6,
+            4,
           ],
-          'circle-color': [
-            'match', ['get', 'node_type'],
-            'ground_site', '#10b981',
-            'satellite', '#ef4444',
-            '#ef4444',
+          "circle-color": [
+            "case",
+            ["==", ["get", "node_type"], "satellite"],
+            [
+              "case",
+              ["==", ["get", "active"], true],
+              COLORS.satelliteActive,
+              COLORS.satelliteInactive,
+            ],
+            // ground_site
+            [
+              "case",
+              ["==", ["get", "role"], "gateway"],
+              COLORS.gateway,
+              COLORS.client,
+            ],
           ],
-          'circle-stroke-width': 2,
-          'circle-stroke-color': '#ffffff',
+          "circle-opacity": [
+            "case",
+            [
+              "all",
+              ["==", ["get", "node_type"], "satellite"],
+              ["==", ["get", "active"], false],
+            ],
+            0.45,
+            1,
+          ],
+          "circle-stroke-width": 2,
+          "circle-stroke-color": "#ffffff",
         },
       });
 
-      map.on('click', 'graph-nodes', (e) => {
+      // ---------- Клик ----------
+      map.on("click", "graph-nodes", (e) => {
         const feature = e.features[0];
         const coordinates = feature.geometry.coordinates.slice();
-        const props = feature.properties;
+        const node = {
+          ...feature.properties,
+          lat: coordinates[1],
+          lon: coordinates[0],
+          active:
+            feature.properties.active === true ||
+            feature.properties.active === "true",
+        };
 
-        const popupContent = `
-          <div style="font-family: sans-serif; padding: 5px; min-width: 150px;">
-            <strong style="font-size: 14px; color: ${props.node_type === 'satellite' ? '#ef4444' : '#10b981'};">
-              ${props.name}
-            </strong>
-            <hr style="margin: 5px 0; border: 0; border-top: 1px solid #eee;">
-            <p style="margin: 0 0 3px 0;"><b>ID:</b> ${props.node_id}</p>
-            <p style="margin: 0; color: #666; font-size: 11px;">
-              <b>Координаты:</b> ${coordinates[1].toFixed(4)}, ${coordinates[0].toFixed(4)}
-            </p>
-          </div>
-        `;
+        if (activePopupRef.current) {
+          activePopupRef.current.root.unmount();
+          activePopupRef.current.popup.remove();
+          activePopupRef.current = null;
+        }
 
-        new maplibregl.Popup({ offset: 10 })
+        const container = document.createElement("div");
+        const popup = new maplibregl.Popup({ offset: 12, maxWidth: "300px" })
           .setLngLat(coordinates)
-          .setHTML(popupContent)
+          .setDOMContent(container)
           .addTo(map);
+
+        const root = createRoot(container);
+        const close = () => {
+          root.unmount();
+          popup.remove();
+          if (activePopupRef.current?.popup === popup) {
+            activePopupRef.current = null;
+          }
+        };
+
+        root.render(
+          <NodePopup
+            node={node}
+            currentTime={currentTimeRef.current}
+            onApply={(o) => onNodeOverrideRef.current?.(o)}
+            onClose={close}
+            colors={COLORS}
+          />
+        );
+
+        activePopupRef.current = { popup, root };
+        popup.on("close", () => {
+          root.unmount();
+          if (activePopupRef.current?.popup === popup) {
+            activePopupRef.current = null;
+          }
+        });
       });
 
-      map.on('mouseenter', 'graph-nodes', () => { map.getCanvas().style.cursor = 'pointer'; });
-      map.on('mouseleave', 'graph-nodes', () => { map.getCanvas().style.cursor = ''; });
+      map.on("mouseenter", "graph-nodes", () => {
+        map.getCanvas().style.cursor = "pointer";
+      });
+      map.on("mouseleave", "graph-nodes", () => {
+        map.getCanvas().style.cursor = "";
+      });
 
       onLoaded?.();
     });
 
-    map.on('error', (e) => console.error('MapLibre error:', e?.error || e));
+    map.on("error", (e) => console.error("MapLibre error:", e?.error || e));
 
     return () => {
+      if (activePopupRef.current) {
+        activePopupRef.current.root.unmount();
+        activePopupRef.current.popup.remove();
+        activePopupRef.current = null;
+      }
       mapRef.current?.remove();
       mapRef.current = null;
     };
   }, []);
 
-  // Обновление данных на карте
   useEffect(() => {
     if (!mapRef.current) return;
-    const source = mapRef.current.getSource('graph-source');
+    const source = mapRef.current.getSource("graph-source");
     if (source) source.setData(geojson);
   }, [geojson]);
 
   return (
     <div
       ref={containerRef}
-      style={{ width: '100%', height: '500px', borderRadius: '4px', overflow: 'hidden' }}
+      style={{
+        width: "100%",
+        height: "500px",
+        borderRadius: 4,
+        overflow: "hidden",
+      }}
     />
   );
 }
