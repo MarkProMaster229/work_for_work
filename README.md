@@ -11,6 +11,9 @@
 - Показывает причины отсутствия маршрута.
 - Позволяет сохранять и сравнивать варианты конфигурации.
 - Выгружает результаты в формате `cosmo-A-result-1.0`.
+## быстрый запуск 
+```./deploy.sh  ```
+
 
 ## Запуск
 Backend (Flask API)
@@ -35,8 +38,11 @@ API будет доступен на http://localhost:5000.
 
 Frontend:
 
-позже - заполнить 
-
+```
+npm install 
+npm install maplibre-gl
+npm run dev 
+```
 ## API endpoints
 
 Healthcheck:
